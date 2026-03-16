@@ -399,6 +399,12 @@ from utils import read_config
 kols = read_config('kols.json')
 kol_usernames = [k['username'] for k in kols['kols']]
 
+# 如果话题涉及具身智能/机器人，追加 robotics KOL 列表
+# 触发词：robot, humanoid, embodied, 具身, 人形, 机器人
+if any(w in '[TOPIC]'.lower() for w in ['robot', 'humanoid', 'embodied', '具身', '人形', '机器人']):
+    kol_usernames += [k['username'] for k in kols.get('robotics', [])]
+    print(f'Robotics topic detected, added {len(kols.get(\"robotics\", []))} robotics KOLs')
+
 # KOL 定向搜索
 kol_tweets = search_kol_tweets(kol_usernames, '[TOPIC_ENGLISH]', tweets_per_kol=10)
 print(f'KOL tweets: {len(kol_tweets)}')
