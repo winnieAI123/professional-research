@@ -478,6 +478,15 @@ print(f'Saved {len(papers)} papers')
 "
 ```
 
+**🚨 Phase 2.5: Data Source Validation (MANDATORY CHECKPOINT)**
+
+> Before proceeding to Phase 3, you MUST verify that you collected data from ALL required sources:
+> 1. ✅ Twitter data exists (`data/twitter_data.json` OR you have tweet data in memory)
+> 2. ✅ Substack data exists (`data/substack_data.json` OR you have article data in memory)
+> 3. ✅ Web search data exists
+>
+> **如果 Twitter 或 Substack 数据缺失 → 停下！回到 Phase 2 执行对应的 Python 脚本。**
+> **用 Tavily/Google MCP 搜到的结果不能算作 Twitter 或 Substack 数据。**
 
 **Phase 3: Per-Chapter Report Generation**
 
