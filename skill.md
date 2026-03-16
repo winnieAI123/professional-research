@@ -34,6 +34,67 @@ This means users only need to edit template MD files to change report format/str
 python -m pip install tavily-python google-genai arxiv PyMuPDF feedparser python-docx requests
 ```
 
+## Pre-flight Check (执行前检查) — 🚨 MANDATORY FIRST STEP
+
+> **核心原则：让用户始终觉得可控。任何功能降级必须用户知情并确认，禁止静默降级。**
+
+在执行任何研究类型之前，Agent **必须**先完成以下检查流程：
+
+### Step 1: 检查 API Key 配置
+
+读取 `.env` 文件（位于 skill 根目录），检查以下 key 是否已配置：
+
+| Key | 影响范围 | 缺失后果 |
+|-----|---------|---------|
+| `GEMINI_API_KEY` | 所有 Type 的 LLM 分析 | 无法调用脚本中的 Gemini 模型，报告质量严重下降 |
+| `TAVILY_API_KEY` | 搜索 + 全文提取 | 降级为 Agent 原生搜索工具，效果接近但部分全文提取受限 |
+| `RAPIDAPI_KEY` | Type 8B Earnings Call Transcript | 无法获取 Seeking Alpha 完整文稿 |
+| `TWITTER_API_KEY` | Type 4, Type 7 KOL 数据 | 无法采集 Twitter/X 推文 |
+
+### Step 2: 缺失时的用户交互流程
+
+如果检测到任何 **关键 key 缺失**，Agent 必须按以下模板向用户说明：
+
+```
+我检查了研究技能的 API 配置，发现以下 key 未配置：
+
+❌ GEMINI_API_KEY — 用于 LLM 分析（所有报告类型必需）
+   → 申请地址：https://aistudio.google.com/apikey（免费）
+
+❌ TAVILY_API_KEY — 用于高质量搜索和全文提取
+   → 申请地址：https://tavily.com（有免费额度）
+
+如果您愿意配置，我可以指导您完成设置（只需在 .env 文件中添加一行）。
+如果暂时不配置，我将使用替代方案继续工作，但以下功能会受限：
+- [具体说明受影响的功能]
+
+请问您希望？
+1. 现在配置（我来指导）
+2. 暂时跳过，使用替代方案继续
+```
+
+### Step 3: 用户选择后的行为
+
+| 用户选择 | Agent 行为 |
+|---------|-----------|
+| **愿意配置** | 指导用户打开申请页面、获取 key → 编辑 `.env` 文件 → 重新检查确认 → 正常执行 |
+| **拒绝配置** | 明确说明降级策略（如 "将使用内置搜索替代 Tavily"），然后继续执行 |
+| **部分配置** | 仅对已配置的 key 走正常流程，未配置的走降级路径 |
+
+### 各 Key 的降级策略
+
+| 缺失 Key | 降级方案 | 质量影响 |
+|----------|---------|---------|
+| `GEMINI_API_KEY` | ⚠️ **严重降级** — Agent 用自身能力直接撰写，无法调用脚本内的 Gemini pipeline | 报告质量大幅下降，建议强烈推荐用户配置 |
+| `TAVILY_API_KEY` | 使用 Agent 原生 `search_web` + `read_url_content` 替代 | 质量接近，可接受 |
+| `RAPIDAPI_KEY` | 改用网页搜索获取 Earnings Call 摘要（非完整文稿） | 第五章质量下降，需标注 |
+| `TWITTER_API_KEY` | 使用网页搜索 `site:x.com` 替代，覆盖面有限 | KOL 覆盖率下降约 50% |
+
+> **⚠️ 禁止行为**：
+> - ❌ 禁止在没有告知用户的情况下跳过或替代任何数据源
+> - ❌ 禁止在 key 缺失时直接开始写报告而不先沟通
+> - ❌ 禁止用 Agent 自身的搜索能力替代脚本而不说明差异
+
 ## Intent Classification
 
 When user submits a research request, classify into one of 7 types using this decision tree:
@@ -88,7 +149,7 @@ When user submits a research request, classify into one of 7 types using this de
 
 **Phase 1: Per-Chapter Data Collection**
 
-For EACH chapter in the template (9 for tech, 12 for finance), do ALL of the following:
+For EACH chapter in the template (7 for tech, 12 for finance), do ALL of the following:
 1. **Search**: Generate 2-3 targeted queries (English + Chinese). Call `tavily_search()` from `collect_search.py`
 2. **Read full text**: For 2-3 most relevant results, call `tavily_extract()` to get the full article
 3. **Extract data points**: Read the full text yourself, extract specific facts/numbers with source URLs
@@ -97,6 +158,8 @@ For EACH chapter in the template (9 for tech, 12 for finance), do ALL of the fol
 
 > **Key principle**: You are the orchestrator. You decide what to search, how many results to read, and when to try alternative queries. This flexibility is WHY we don't use a pipeline script for company research.
 
+> **第三章（产品与技术分析）通常是最重的章节**，可能需要 4-6 组 query；**第五章（竞争分析）** 需要额外搜索 2-3 家主要竞品。Agent 应按章节重要性灵活分配搜索深度。
+
 **Phase 2: Financial Data (listed companies only)**
 ```bash
 python scripts/collect_financials.py --ticker 300418 --output data/fin.json
@@ -104,18 +167,21 @@ python scripts/collect_financials.py --ticker 300418 --output data/fin.json
 ```
 This gives you structured income statements, balance sheets, market data in seconds. **DO NOT skip this for listed companies** — web search cannot match this precision.
 
-**Phase 3: Per-Chapter Report Generation**
+**Phase 3: Per-Chapter Report Generation（写作风格是关键！）**
 
 For EACH chapter, call `generate_content()` separately with:
-- The specific chapter's template section (not the entire template)
+- **写作风格指令（MUST prepend!）**: 从 `references/type2_company_research.md` 的"写作风格总则"复制完整的风格指令，作为每次 LLM 调用的 system prompt 或 prompt 前缀。**这是确保报告像分析师写的（而非机器填充的）的关键。**
+- The specific chapter's template section (including the `<!-- 写作指引 -->` comments — these guide the LLM's analytical thinking)
 - ALL data points you collected for that chapter (no truncation because you feed directly)
-- Anti-fabrication rules: no data = "未找到相关公开数据（截至搜索日期）"
-- Every fact MUST have a source URL
+- Anti-fabrication rules: no data = "截至研究日期，该数据尚未公开披露"（但不要因为个别数据缺失就停止分析）
+- Key facts should cite sources naturally in prose (e.g., "据管理层在2025科技日披露"), URLs collected in the 数据来源 section
 
-> **NEVER generate the entire 9-chapter report in one LLM call.** One call per chapter ensures each chapter gets full context and sufficient output tokens.
+> **NEVER generate the entire 7-chapter report in one LLM call.** One call per chapter ensures each chapter gets full context and sufficient output tokens.
+
+> **核心判断（Key Takeaways）最后写**：在所有 7 个章节生成完毕后，综合全文提炼核心判断，放在报告最前面。
 
 **Phase 4: Assembly & Word Output**
-Combine all chapter markdown outputs → call `save_report()` from `generate_report.py` for MD + Word.
+按最终报告顺序（核心判断 → 一 → 二 → 三 → 四 → 五 → 六 → 七 → 数据来源）合并所有章节 → call `save_report()` from `generate_report.py` for MD + Word.
 
 
 ### Type 3: Industry Panorama (行业全景研究)
@@ -405,11 +471,20 @@ Other data collection scripts:
 - `collect_substack.py` — Substack article search (Type 4)
 - `collect_rss.py` — Blog RSS feeds (Type 6)
 
-**🔄 Tavily 配额用完时的 Fallback 策略**
+**🔄 搜索工具 Fallback 策略（Tavily 不可用时）**
+
+**场景 A：用户未配置 TAVILY_API_KEY**
+
+> 如果 `.env` 中没有 `TAVILY_API_KEY`，Agent **不应报错或中断**，而应直接使用原生工具完成所有搜索和全文提取：
+> - **搜索**: 使用 Agent 环境中的 `search_web` / `web_search` 等 MCP 搜索工具
+> - **全文提取**: 使用 `read_url_content` 工具直接读取搜索结果的 URL
+> - **数据质量几乎等效**，报告不应因此降质
+
+**场景 B：Tavily 配额用完**
 
 `collect_search.py` 支持多 API key 自动轮换（429/402/432 自动切换备用 key）。当所有 key 均耗尽时，脚本会抛出 `TavilyQuotaExhausted` 异常并明确提示。
 
-**Agent 必须无缝降级，不得因 Tavily 配额问题中断报告生成：**
+**两种场景下 Agent 的行为完全一致——无缝切换到原生工具：**
 
 1. **搜索替代**: 改用 Agent 环境中的 `search_web` / `web_search` 等 MCP 搜索工具
 2. **全文提取替代**: 改用 `read_url_content` 工具直接读取已知 URL 的页面内容

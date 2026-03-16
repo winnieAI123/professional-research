@@ -859,6 +859,39 @@ def generate_earnings_report(quarterly_data, transcript_analysis, company_name, 
     md_sections.append(header)
     
     # ═══════════════════════════════════════════════════════
+    # EXECUTIVE SUMMARY (before chapters)
+    # ═══════════════════════════════════════════════════════
+    exec_summary_prompt = f"""{SYS}
+
+请用一段自然语言（200-300字）概括{company_name} {quarter}本季度最核心的信息。
+不要用表格，不要用bullet point，用流畅的段落叙述。直接输出段落文字，不要写标题。
+
+必须覆盖以下维度（按重要性排列）：
+1. 营收规模 + YoY增速 + 是否Beat/Miss预期
+2. 核心利润指标（经调整营业利润/利润率/净利润）
+3. CapEx资本支出（科技公司必提，未披露则注明"CapEx未单独披露"）
+4. 核心增长驱动力 & 主要拖累（各1-2个）
+5. 管理层指引/展望（下季度或全年预期，有数字引数字，无则写"未给出具体量化指引"）
+6. 整体基调判断（在段落末尾用一个词总结：Confident/Cautious/Defensive）
+
+风格参考:
+"本季度实现营收¥83.2亿（YoY +8%），Non-GAAP净利润¥8.78亿（YoY +94%），经营利润率改善至6.1%。广告业务增长27%成为核心驱动力，但游戏业务下滑14%。CapEx方面未单独披露。管理层将AI定位为2026年核心战略，计划审慎配置资本投入；未给出具体量化指引。整体基调Confident。"
+
+--- 以下是数据源 ---
+财报/新闻稿原文:
+{fin_data}
+
+电话会实录:
+{transcript_for_chapters}"""
+
+    print(f"    [Report] Executive Summary...")
+    exec_summary = _llm_call(exec_summary_prompt, max_tokens=1500, tag="ExecSummary")
+    if exec_summary:
+        md_sections.append(f"## Executive Summary\n\n{exec_summary.strip()}\n\n---")
+    else:
+        md_sections.append("## Executive Summary\n\n（摘要生成失败）\n\n---")
+    
+    # ═══════════════════════════════════════════════════════
     # CHAPTERS 1-8: Template-driven generation
     # ═══════════════════════════════════════════════════════
     
