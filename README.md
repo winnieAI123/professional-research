@@ -69,9 +69,9 @@ cp .env.example .env
 | Variable | Required For | How to Get |
 |----------|:------------:|------------|
 | `GEMINI_API_KEY` | All types | [Google AI Studio](https://aistudio.google.com/) |
-| `TAVILY_API_KEY` | All types | [tavily.com](https://tavily.com/) |
-| `TWITTER_API_KEY` | Type 4 & 7 | [twitterapi.io](https://twitterapi.io/) |
-| `RAPIDAPI_KEY` | Type 8 (Earnings) | [rapidapi.com](https://rapidapi.com/) |
+| `TAVILY_API_KEY` | All types | [Tavily](https://app.tavily.com/home) |
+| `TWITTER_API_KEY` | Type 4 & 7 | [TwitterAPI.io](https://twitterapi.io/dashboard) |
+| `RAPIDAPI_KEY` | Type 8 (Earnings) | [RapidAPI](https://rapidapi.com/) — subscribe to [Seeking Alpha API](https://rapidapi.com/belchiorarkad-FqvHs2EDOtP/api/seeking-alpha.p.rapidapi.com) |
 
 ### 3. Run a Research Pipeline
 
