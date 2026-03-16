@@ -1,0 +1,23 @@
+{
+    "ai_labs": {
+        "Google AI": "https://blog.google/technology/ai/rss/",
+        "OpenAI": "https://openai.com/blog/rss.xml",
+        "Microsoft Research": "https://www.microsoft.com/en-us/research/feed/",
+        "DeepMind": "https://deepmind.google/blog/rss.xml",
+        "Hugging Face": "https://huggingface.co/blog/feed.xml",
+        "Anthropic": "https://www.anthropic.com/rss.xml"
+    },
+    "chinese_tech_media": {
+        "机器之心": "https://plink.anyfeeder.com/weixin/almosthuman2014"
+    },
+    "arxiv_categories": {
+        "cs.AI": "人工智能",
+        "cs.LG": "机器学习",
+        "cs.CL": "自然语言处理",
+        "cs.CV": "计算机视觉",
+        "cs.RO": "机器人学",
+        "cs.AR": "计算机体系结构",
+        "cs.SE": "软件工程",
+        "eess.SP": "信号处理"
+    }
+}

@@ -1,0 +1,40 @@
+{
+    "focus_areas": {
+        "计算架构": [
+            "Processing-in-Memory", "PIM",
+            "Near-Memory Computing", "Processing-Near-Memory", "Processing-Using-Memory",
+            "3D-NAND", "3D-SRAM",
+            "Neuromorphic computing", "Neuromorphic"
+        ],
+        "大模型优化": [
+            "LLM Quantization", "Model Compression",
+            "KV Cache", "KV-Cache",
+            "Mixture of Experts", "MoE",
+            "Self-Evolution", "Continual Learning",
+            "Multimodal Large Language Model", "MLLM"
+        ],
+        "系统与互联": [
+            "CXL", "Compute Express Link",
+            "HBM", "High Bandwidth Memory",
+            "HBF",
+            "Optical Interconnect",
+            "Chiplet"
+        ]
+    },
+    "arxiv_categories": {
+        "cs.AR": "计算机体系结构",
+        "cs.AI": "人工智能",
+        "cs.LG": "机器学习",
+        "cs.CL": "自然语言处理",
+        "cs.DC": "分布式计算",
+        "cs.ET": "新兴技术",
+        "eess.SP": "信号处理"
+    },
+    "hardware_spec_keywords": [
+        "FLOPS", "TOPS", "latency", "throughput", "bandwidth",
+        "power consumption", "energy efficiency", "SRAM", "DRAM",
+        "GPU", "TPU", "FPGA", "ASIC", "accelerator",
+        "bit-width", "INT8", "INT4", "FP16", "BF16",
+        "memory footprint", "inference speed", "token/s"
+    ]
+}

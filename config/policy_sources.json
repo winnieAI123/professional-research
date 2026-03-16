@@ -1,0 +1,321 @@
+{
+    "domestic": {
+        "ministry_level": {
+            "gov_cn": {
+                "name": "国务院/中国政府网",
+                "site": "gov.cn",
+                "url": "https://www.gov.cn/",
+                "focus": "国务院政策文件、政府工作报告、政策解读、政策吹风会",
+                "note": "综合性最强，顶层方向"
+            },
+            "ndrc": {
+                "name": "国家发展和改革委员会",
+                "site": "ndrc.gov.cn",
+                "url": "https://www.ndrc.gov.cn/",
+                "focus": "新基建投资、数字经济规划、东数西算工程、超长期特别国债",
+                "note": "产业与数字经济"
+            },
+            "miit": {
+                "name": "工业和信息化部",
+                "site": "miit.gov.cn",
+                "url": "https://www.miit.gov.cn/",
+                "focus": "AI硬件、5G/6G、工业互联网、集成电路产业政策",
+                "key_departments": ["电子信息司", "信息技术发展司"],
+                "note": "AI/云计算/信创"
+            },
+            "most": {
+                "name": "科学技术部",
+                "site": "most.gov.cn",
+                "url": "https://most.gov.cn/",
+                "focus": "科技计划、创新积分制、未来产业、政策解读",
+                "note": "科技创新"
+            },
+            "nda": {
+                "name": "国家数据局",
+                "site": "nda.gov.cn",
+                "url": "https://www.nda.gov.cn/",
+                "focus": "数据要素、数据资产、公共数据运营",
+                "note": "数据要素"
+            },
+            "cac": {
+                "name": "国家互联网信息办公室",
+                "site": "cac.gov.cn",
+                "url": "https://www.cac.gov.cn/",
+                "focus": "网络安全、数据治理、AI备案、算法治理",
+                "note": "网安/AI治理"
+            },
+            "sac": {
+                "name": "国家标准化管理委员会",
+                "site": "sac.gov.cn",
+                "url": "https://www.sac.gov.cn/",
+                "focus": "标准征求意见、技术标准发布",
+                "note": "标准"
+            }
+        },
+        "financial_regulators": {
+            "pbc": {
+                "name": "中国人民银行",
+                "site": "pbc.gov.cn",
+                "url": "https://www.pbc.gov.cn/",
+                "focus": "数字人民币、支付清算、金融科技监管、货币政策"
+            },
+            "nfra": {
+                "name": "国家金融监督管理总局",
+                "site": "nfra.gov.cn",
+                "url": "https://www.nfra.gov.cn/",
+                "focus": "银行业保险业数字化转型、科技金融政策、消费金融监管"
+            },
+            "sasac": {
+                "name": "国务院国资委",
+                "site": "sasac.gov.cn",
+                "url": "http://www.sasac.gov.cn/",
+                "focus": "央企/地方国企在数字基建、算力中心等领域的投资动态"
+            }
+        },
+        "local_level": {
+            "beijing": {
+                "name": "北京市",
+                "site": "beijing.gov.cn",
+                "url": "https://www.beijing.gov.cn/",
+                "departments": {
+                    "fgw": "fgw.beijing.gov.cn",
+                    "jxj": "jxj.beijing.gov.cn",
+                    "kw": "kw.beijing.gov.cn",
+                    "jrj": "jrj.beijing.gov.cn"
+                }
+            },
+            "shanghai": {
+                "name": "上海市",
+                "site": "sh.gov.cn",
+                "url": "https://www.shanghai.gov.cn/",
+                "departments": {
+                    "fgw": "fgw.sh.gov.cn",
+                    "sheitc": "sheitc.sh.gov.cn",
+                    "stcsm": "stcsm.sh.gov.cn",
+                    "jrj": "jrj.sh.gov.cn",
+                    "bigdata": "bigdata.sh.gov.cn"
+                }
+            },
+            "guangzhou": {
+                "name": "广州市",
+                "site": "gz.gov.cn",
+                "url": "https://www.gz.gov.cn/",
+                "departments": {
+                    "fgw": "fgw.gz.gov.cn",
+                    "gxj": "gxj.gz.gov.cn",
+                    "kjj": "kjj.gz.gov.cn",
+                    "jrj": "jrj.gz.gov.cn",
+                    "zsj": "zsj.gz.gov.cn"
+                }
+            },
+            "shenzhen": {
+                "name": "深圳市",
+                "site": "sz.gov.cn",
+                "url": "https://www.sz.gov.cn/",
+                "departments": {
+                    "fgw": "fgw.sz.gov.cn",
+                    "gxj": "gxj.sz.gov.cn",
+                    "stic": "stic.sz.gov.cn",
+                    "jr": "jr.sz.gov.cn",
+                    "zsj": "zsj.sz.gov.cn"
+                }
+            },
+            "hangzhou": {
+                "name": "杭州市",
+                "site": "hangzhou.gov.cn",
+                "url": "https://www.hangzhou.gov.cn/",
+                "departments": {
+                    "fgw": "fgw.hangzhou.gov.cn",
+                    "jxj": "jxj.hangzhou.gov.cn",
+                    "kjj": "kjj.hangzhou.gov.cn",
+                    "jrb": "jrb.hangzhou.gov.cn",
+                    "dsj": "dsj.hangzhou.gov.cn"
+                }
+            },
+            "hainan": {
+                "name": "海南省",
+                "site": "hainan.gov.cn",
+                "url": "https://www.hainan.gov.cn/",
+                "departments": {
+                    "fgw": "hainan.gov.cn/hainan/fgw/",
+                    "iitb": "iitb.hainan.gov.cn",
+                    "dost": "dost.hainan.gov.cn",
+                    "jrj": "jrj.hainan.gov.cn",
+                    "dsj": "dsj.hainan.gov.cn"
+                }
+            }
+        },
+        "domains": [
+            "AI与机器人",
+            "云计算与算力",
+            "数据安全",
+            "金融科技与消费信贷"
+        ],
+        "keywords": {
+            "AI与机器人": [
+                "人工智能", "AI", "大模型", "生成式人工智能",
+                "算法治理", "具身智能", "机器人", "AI备案"
+            ],
+            "云计算与算力": [
+                "云计算", "公共云", "数据中心", "算力",
+                "智算中心", "信创", "东数西算", "算力券"
+            ],
+            "数据安全": [
+                "数据安全", "数据保护", "个人信息保护",
+                "数据出境", "隐私计算", "数据要素", "数据资产入表"
+            ],
+            "金融科技与消费信贷": [
+                "金融科技", "数字金融", "数字人民币",
+                "消费金融", "科技金融", "互联网保险",
+                "投贷联动", "科技保险"
+            ]
+        },
+        "policy_type_words": "通知 意见 办法 指导意见 实施细则 管理规定 标准 规范 行动方案 行动计划",
+        "tracking_priorities_2026": [
+            {
+                "direction": "公共云发展",
+                "signal": "政府工作报告首次明确支持公共云发展",
+                "watch": "预算采购规则、审计标准调整；政务云、行业云市场机会"
+            },
+            {
+                "direction": "超大规模智算集群",
+                "signal": "新基建工程明确提出",
+                "watch": "西部绿电富集区域项目布局；算力基础设施投资"
+            },
+            {
+                "direction": "智能体与AI+",
+                "signal": "人工智能+深化，终端应用场景落地",
+                "watch": "各行业AI+解决方案需求；与实体经济结合的应用试点"
+            },
+            {
+                "direction": "科技保险",
+                "signal": "四部门联合发文推动",
+                "watch": "科技企业风险保障产品创新；首台套装备保险"
+            },
+            {
+                "direction": "数字人民币信贷",
+                "signal": "应用场景从支付向融资扩展",
+                "watch": "供应链金融、普惠信贷等领域创新模式"
+            }
+        ],
+        "media_thinktanks": {
+            "authoritative": [
+                {"name": "新华网", "site": "xinhuanet.com", "note": "科技政策、金融频道"},
+                {"name": "国务院新闻办", "site": "scio.gov.cn", "note": "发布会、政策解读"}
+            ],
+            "thinktanks": [
+                {"name": "中国金融四十人论坛(CF40)", "site": "cf40.org.cn", "note": "中长期趋势、改革方向"},
+                {"name": "中国社会科学院", "site": "cass.cn", "note": "深度研究报告"},
+                {"name": "国务院发展研究中心", "site": "drc.gov.cn", "note": "政策分析"}
+            ],
+            "finance_media": [
+                {"name": "财新网", "site": "caixin.com", "note": "金融监管深度解读"},
+                {"name": "第一财经", "site": "yicai.com", "note": "市场动态"},
+                {"name": "21世纪经济报道", "site": "21jingji.com", "note": "政策解读"}
+            ],
+            "tech_media": [
+                {"name": "36氪", "site": "36kr.com", "note": "科技政策对赛道影响"},
+                {"name": "虎嗅", "site": "huxiu.com", "note": "产业分析"}
+            ]
+        },
+        "monthly_report": {
+            "cover": {
+                "title": "政策分析月报",
+                "period_format": "YYYY年MM月",
+                "core_summary": "3-5句话概括本月最重要政策动向及对核心业务线的潜在影响",
+                "focus_theme": "设定一个本月核心主题"
+            },
+            "sections": [
+                "一、宏观政策要览",
+                "二、分领域政策动态",
+                "三、地方动态与机会扫描",
+                "四、数据解读与市场风向",
+                "五、深度专题解读",
+                "六、业务影响与策略建议"
+            ]
+        }
+    },
+    "overseas": {
+        "regulators": {
+            "UK_FCA": {
+                "name": "金融行为监管局 (FCA)",
+                "country": "英国",
+                "site": "fca.org.uk"
+            },
+            "FR_ACPR": {
+                "name": "审慎监管局 (ACPR)",
+                "country": "法国",
+                "site": "acpr.banque-france.fr"
+            },
+            "DE_BaFin": {
+                "name": "联邦金融监管局 (BaFin)",
+                "country": "德国",
+                "site": "bafin.de"
+            },
+            "NL_AFM": {
+                "name": "金融市场管理局 (AFM)",
+                "country": "荷兰",
+                "site": "afm.nl"
+            },
+            "BE_FSMA": {
+                "name": "金融服务市场管理局 (FSMA)",
+                "country": "比利时",
+                "site": "fsma.be"
+            },
+            "LU_CSSF": {
+                "name": "金融监管委员会 (CSSF)",
+                "country": "卢森堡",
+                "site": "cssf.lu"
+            },
+            "SE_FI": {
+                "name": "金融监管局 (FI)",
+                "country": "瑞典",
+                "site": "fi.se"
+            },
+            "LT_LB": {
+                "name": "立陶宛银行 (LB)",
+                "country": "立陶宛",
+                "site": "lb.lt"
+            },
+            "EU_ECB": {
+                "name": "欧洲央行 (ECB)",
+                "country": "欧盟",
+                "site": "ecb.europa.eu"
+            },
+            "US_SEC": {
+                "name": "证券交易委员会 (SEC)",
+                "country": "美国",
+                "site": "sec.gov"
+            },
+            "US_CFTC": {
+                "name": "商品期货交易委员会 (CFTC)",
+                "country": "美国",
+                "site": "cftc.gov"
+            },
+            "SG_MAS": {
+                "name": "金融管理局 (MAS)",
+                "country": "新加坡",
+                "site": "mas.gov.sg"
+            },
+            "HK_SFC": {
+                "name": "证监会 (SFC)",
+                "country": "香港",
+                "site": "sfc.hk"
+            },
+            "HK_HKMA": {
+                "name": "金管局 (HKMA)",
+                "country": "香港",
+                "site": "hkma.gov.hk"
+            }
+        },
+        "search_keywords": {
+            "license": ["license", "authorisation", "authorization", "permit", "registration"],
+            "application": ["application process", "how to apply", "application form", "application guide"],
+            "fees": ["application fee", "annual fee", "supervisory levy", "fee schedule"],
+            "capital": ["minimum capital", "capital requirements", "initial capital", "own funds"],
+            "compliance": ["fit and proper", "management requirements", "key function holders"],
+            "register": ["register", "licensed entities", "authorised firms", "supervised entities"],
+            "fintech": ["consumer credit", "buy now pay later", "BNPL", "lending license", "fintech"]
+        }
+    }
+}

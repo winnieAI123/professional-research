@@ -1,0 +1,133 @@
+{
+    "kols": [
+        {
+            "name": "Sam Altman",
+            "username": "sama",
+            "category": "AI Leaders"
+        },
+        {
+            "name": "Jensen Huang",
+            "username": "nvidia",
+            "category": "Tech CEOs"
+        },
+        {
+            "name": "Sundar Pichai",
+            "username": "sundarpichai",
+            "category": "Tech CEOs"
+        },
+        {
+            "name": "Satya Nadella",
+            "username": "satyanadella",
+            "category": "Tech CEOs"
+        },
+        {
+            "name": "Mark Zuckerberg",
+            "username": "finkd",
+            "category": "Tech CEOs"
+        },
+        {
+            "name": "Dario Amodei",
+            "username": "dario_amodei",
+            "category": "AI Safety"
+        },
+        {
+            "name": "Yann LeCun",
+            "username": "ylecun",
+            "category": "AI Research"
+        },
+        {
+            "name": "Andrew Ng",
+            "username": "AndrewYNg",
+            "category": "AI Research"
+        },
+        {
+            "name": "Fei-Fei Li",
+            "username": "feifeili",
+            "category": "AI Research"
+        },
+        {
+            "name": "Andrej Karpathy",
+            "username": "karpathy",
+            "category": "AI Research"
+        },
+        {
+            "name": "Greg Brockman",
+            "username": "gdb",
+            "category": "AI Leaders"
+        },
+        {
+            "name": "Demis Hassabis",
+            "username": "demaborsa",
+            "category": "AI Leaders"
+        },
+        {
+            "name": "Jim Fan",
+            "username": "drjimfan",
+            "category": "AI Research"
+        },
+        {
+            "name": "Emad Mostaque",
+            "username": "EMostaque",
+            "category": "AI Leaders"
+        }
+    ],
+    "robotics": [
+        {
+            "name": "Figure",
+            "username": "Figure_robot",
+            "category": "Robotics"
+        },
+        {
+            "name": "Tesla Optimus",
+            "username": "Tesla_Optimus",
+            "category": "Robotics"
+        },
+        {
+            "name": "Brett Adcock",
+            "username": "adcock_brett",
+            "category": "Robotics"
+        },
+        {
+            "name": "Boston Dynamics",
+            "username": "BostonDynamics",
+            "category": "Robotics"
+        },
+        {
+            "name": "Agility Robotics",
+            "username": "agilityrobotics",
+            "category": "Robotics"
+        },
+        {
+            "name": "Unitree",
+            "username": "UnitreeRobotics",
+            "category": "Robotics"
+        }
+    ],
+    "substack_authors": [
+        {
+            "name": "Ben Thompson",
+            "publication": "Stratechery",
+            "focus": "Tech Strategy"
+        },
+        {
+            "name": "Dylan Patel",
+            "publication": "SemiAnalysis",
+            "focus": "Semiconductors/AI Hardware"
+        },
+        {
+            "name": "The Gradient",
+            "publication": "The Gradient",
+            "focus": "AI Research"
+        },
+        {
+            "name": "Lenny Rachitsky",
+            "publication": "Lenny's Newsletter",
+            "focus": "Product/Growth"
+        },
+        {
+            "name": "Nathan Baschez",
+            "publication": "Divinations",
+            "focus": "Business Strategy"
+        }
+    ]
+}

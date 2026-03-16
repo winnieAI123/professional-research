@@ -1,0 +1,109 @@
+{
+  "sources": {
+    "lmarena": {
+      "base_url": "https://arena.ai/leaderboard",
+      "categories": {
+        "text": {"cols": 7, "label": "Text（文本）"},
+        "text-to-image": {"cols": 5, "label": "Text-to-Image（文生图）"},
+        "text-to-video": {"cols": 5, "label": "Text-to-Video（文生视频）"},
+        "image-to-video": {"cols": 5, "label": "Image-to-Video（图生视频）"}
+      }
+    },
+    "artificial_analysis": {
+      "base_url": "https://artificialanalysis.ai",
+      "rsc_pages": {
+        "text_to_image": "/image/leaderboard/text-to-image",
+        "text_to_video": "/video/leaderboard/text-to-video",
+        "image_to_video": "/video/leaderboard/image-to-video"
+      }
+    },
+    "superclue": {
+      "base_url": "https://www.superclueai.com",
+      "category_order": [
+        "text_to_image",
+        "text_to_video",
+        "image_to_video",
+        "image_edit",
+        "text_to_speech",
+        "ref_to_video",
+        "web_coding"
+      ],
+      "category_labels": {
+        "text_to_image": "文生图",
+        "text_to_video": "文生视频",
+        "image_to_video": "图生视频",
+        "image_edit": "图像编辑",
+        "text_to_speech": "语音合成",
+        "ref_to_video": "参考视频",
+        "web_coding": "前端网页"
+      }
+    }
+  },
+  "shared_tracks": {
+    "文生图 (Text-to-Image)": {"lm": "text_to_image", "aa": "text_to_image", "sc": "text_to_image"},
+    "文生视频 (Text-to-Video)": {"lm": "text_to_video", "aa": "text_to_video", "sc": "text_to_video"},
+    "图生视频 (Image-to-Video)": {"lm": "image_to_video", "aa": "image_to_video", "sc": "image_to_video"}
+  },
+  "exclusive_tracks": {
+    "lm": {"文本 (Text)": "text"},
+    "aa": {},
+    "sc": {
+      "图像编辑 (Image Edit)": "image_edit",
+      "语音合成 (TTS)": "text_to_speech",
+      "参考视频 (Ref-to-Video)": "ref_to_video",
+      "前端网页 (Web Coding)": "web_coding"
+    }
+  },
+  "chinese_vendors": [
+    "ByteDance", "Alibaba", "Kuaishou", "Tencent", "Baidu",
+    "Zhipu", "MiniMax", "Moonshot", "StepFun", "01.AI",
+    "Shengshu", "Xiaomi", "SenseTime", "iFlytek", "Meitu"
+  ],
+  "vendor_patterns": {
+    "OpenAI": ["gpt", "dall-e", "sora", "openai"],
+    "Google": ["gemini", "imagen", "veo", "google"],
+    "Meta": ["llama", "meta", "emu"],
+    "Anthropic": ["claude", "anthropic"],
+    "Midjourney": ["midjourney"],
+    "Stability": ["stable diffusion", "stability", "sdxl", "sd3"],
+    "ByteDance": ["doubao", "bytedance", "dreamina", "jimeng"],
+    "Alibaba": ["qwen", "tongyi", "wanx", "alibaba"],
+    "Tencent": ["hunyuan", "tencent"],
+    "Baidu": ["ernie", "wenxin", "baidu"],
+    "Kuaishou": ["kling", "kuaishou", "kolors"],
+    "Zhipu": ["glm", "cogview", "cogvideo", "zhipu"],
+    "MiniMax": ["minimax", "hailuo"],
+    "Moonshot": ["kimi", "moonshot"],
+    "StepFun": ["step", "stepfun"],
+    "Shengshu": ["vidu", "shengshu"],
+    "Xiaomi": ["xiaomi", "megavii"],
+    "Adobe": ["firefly", "adobe"],
+    "xAI": ["grok", "xai"],
+    "Runway": ["runway", "gen-3", "gen-4"],
+    "Pika": ["pika"],
+    "Luma": ["luma", "dream machine"],
+    "Black Forest Labs": ["flux", "black forest"],
+    "Recraft": ["recraft"],
+    "Ideogram": ["ideogram"]
+  },
+  "analysis": {
+    "top_n_display": 10,
+    "top_n_vendor": 20,
+    "cross_compare_top_n": 30,
+    "opportunity_threshold": 3,
+    "fuzzy_match_threshold": 0.8
+  },
+  "report": {
+    "style": {
+      "header_bg": "#1B3A5C",
+      "accent": "#2563EB",
+      "row_alt": "#F2F7FB",
+      "font_cn": "微软雅黑",
+      "font_en": "Arial"
+    },
+    "gemini": {
+      "temperature": 0.4,
+      "max_output_tokens": 8192
+    }
+  }
+}
