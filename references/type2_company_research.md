@@ -137,17 +137,16 @@ For finance companies, license data is critical. Search strategy:
 
 ---
 
-## Report Generation
+## Report Generation — Agent-Driven Per-Chapter
 
-Read the appropriate template:
-```python
-from utils import read_template
-# For tech companies
-template = read_template("company_research_tech.md")
-# For finance companies
-template = read_template("company_research_finance.md")
-```
+> **Important**: Do NOT use `run_report_gen.py` for company research.
+> Use the per-chapter workflow defined in `skill.md` Type 2 section (Phase 1-4).
 
-Then call `llm_client.generate_report_section()` with template + data.
+The Agent should:
+1. Read the template and split by `## 一、` / `## 二、` etc. to isolate each chapter's template section
+2. For EACH chapter: prepend "写作风格总则" + feed that chapter's template + that chapter's collected data → `generate_content()` → get chapter output
+3. After ALL chapters, write 核心判断 (Key Takeaways) based on the full content
+4. Concatenate in order → `save_report()` for MD + Word
 
 **Tech company 特别注意**：每次调用 LLM 生成章节时，必须在 prompt 前附加上述"写作风格总则"。这是确保报告读起来像分析师写的（而非机器填充的）的关键。
+

@@ -111,34 +111,21 @@ arXiv PDF processing + Gemini analysis may trigger 503 errors. The `llm_client.p
 
 ---
 
-## Report Generation
+## Report Generation — Agent-Driven Per-Chapter
 
-```python
-from utils import read_template
+> **Important**: Do NOT use `run_report_gen.py` for industry research.
+> Use the per-chapter workflow defined in `skill.md` Type 3 section.
 
-# Always generate commercial part
-commercial_template = read_template("industry_research_commercial.md")
+The Agent should:
+1. Read the template and split by `## 一、` / `## 二、` etc. to isolate each chapter's template section
+2. For EACH chapter: feed that chapter's template + that chapter's collected data → `generate_content()` → get chapter output
+3. After ALL chapters: concatenate in order → `save_report()` for MD + Word
 
-# Generate technical part only if scope includes it
-if needs_technical:
-    technical_template = read_template("industry_research_technical.md")
-```
+**Why per-chapter**: A single prompt with both templates (~270 lines) + all data causes Gemini to truncate output and lose data. Per-chapter generation ensures each section gets full context and max_output_tokens.
 
-For industry reports, it often helps to generate the report in sections rather than all at once, because the template is large. Call `generate_report_section()` per major section, then concatenate.
+**If Commercial + Technical**:
+1. Generate all 4 commercial chapters first
+2. Then generate all 4 technical chapters
+3. Merge with `---` separator between the two parts
+4. Save as one combined report
 
-## Proven Technique: Section-by-Section Generation
-
-When combining Commercial + Technical parts, generate them as **separate Gemini calls**, then merge:
-
-1. **Call 1**: Feed commercial template + web data → generate commercial report (~6000-8000 chars)
-2. **Call 2**: Feed technical template + arXiv data → generate technical report (~8000-10000 chars)
-3. **Merge**: Concatenate with `---` separator
-4. **Save**: Pass merged content to `save_report()`
-
-**Why**: A single prompt with both templates (~270 lines) + data often causes Gemini to truncate the output. Section-by-section generation ensures each part gets full attention and max_output_tokens.
-
-**Prompt tips**:
-- Set `max_output_tokens=8000` per section
-- Include the full template text in each prompt
-- Explicitly list which companies/papers to cover
-- BOM data: if not found, say "公开数据有限", don't fabricate

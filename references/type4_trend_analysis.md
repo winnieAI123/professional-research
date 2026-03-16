@@ -122,10 +122,13 @@ Every opinion in Section 2-3 MUST have:
 
 No fabricated quotes. No paraphrased-as-quoted content. If the LLM didn't read the full text, that opinion may NOT appear in the report.
 
-## Report Output
+## Report Output — Agent-Driven Per-Chapter
 
-```python
-from utils import read_template
-template = read_template("trend_analysis.md")
-# Generate report via llm_client.generate_report_section()
-```
+> **Important**: Do NOT use `run_report_gen.py` for trend analysis.
+> Use the per-chapter workflow defined in `skill.md` Type 4 section (Phase 1-4).
+
+The Agent should:
+1. Collect data from all 4 sources (Phase 2)
+2. For EACH of the 8 chapters: feed that chapter's template + relevant data subset → `generate_content()` → get chapter output
+3. Concatenate in order → `save_report()` for MD + Word
+

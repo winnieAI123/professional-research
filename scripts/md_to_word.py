@@ -78,6 +78,95 @@ def clean_markdown_syntax(text):
     return text.strip()
 
 
+def repair_markdown_tables(content):
+    """Pre-process Markdown content to fix common LLM-generated table malformations.
+    
+    Fixes:
+    - Orphaned lines between table rows (text without | that should be part of a table)
+    - Rows with mismatched column counts (pads or truncates to match header)
+    - Unclosed ** markers inside cells
+    - Trailing garbage like lone ')' or '*' after table rows
+    - Missing leading/trailing | in table rows
+    """
+    lines = content.split('\n')
+    repaired = []
+    in_table = False
+    header_col_count = 0
+    
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+        
+        # Detect table start
+        if stripped.startswith('|') and stripped.endswith('|') and not in_table:
+            in_table = True
+            header_col_count = stripped.count('|') - 1  # pipes between cells
+            repaired.append(line)
+            i += 1
+            continue
+        
+        if in_table:
+            # Table row (starts with |)
+            if stripped.startswith('|'):
+                # Fix: ensure line ends with |
+                if not stripped.endswith('|'):
+                    # Remove trailing garbage like ')' or lone '**'
+                    stripped = stripped.rstrip(')* ')
+                    if not stripped.endswith('|'):
+                        stripped += ' |'
+                
+                # Fix: balance column count
+                pipe_count = stripped.count('|') - 1
+                if pipe_count > 0 and header_col_count > 0 and pipe_count != header_col_count:
+                    cells = stripped.split('|')[1:-1]  # exclude first/last empty
+                    # Pad if too few columns
+                    while len(cells) < header_col_count:
+                        cells.append(' ')
+                    # Truncate if too many columns
+                    cells = cells[:header_col_count]
+                    stripped = '| ' + ' | '.join(c.strip() for c in cells) + ' |'
+                
+                repaired.append(stripped)
+                i += 1
+                continue
+            
+            # Non-table line while in_table: check if it's orphaned table content
+            if stripped and not stripped.startswith('#') and not stripped.startswith('>'):
+                # Check if next line is a table row — if so, this is orphaned content, skip it
+                if i + 1 < len(lines) and lines[i + 1].strip().startswith('|'):
+                    # Orphaned line between table rows — discard it
+                    i += 1
+                    continue
+                # Otherwise, table has ended
+                in_table = False
+                header_col_count = 0
+            else:
+                # Empty line or heading — table ended
+                in_table = False
+                header_col_count = 0
+            
+            repaired.append(line)
+            i += 1
+            continue
+        
+        # Not in table — pass through
+        repaired.append(line)
+        i += 1
+    
+    result = '\n'.join(repaired)
+    
+    # Global cleanup: fix unclosed ** pairs (orphaned bold markers)
+    # Count ** occurrences; if odd, the last one is orphaned
+    double_star_count = result.count('**')
+    if double_star_count % 2 != 0:
+        # Remove the last orphaned **
+        last_pos = result.rfind('**')
+        result = result[:last_pos] + result[last_pos + 2:]
+    
+    return result
+
+
 def parse_table(lines):
     """Parse Markdown table lines into 2D list."""
     rows = []
@@ -405,6 +494,9 @@ def convert_md_to_word(input_path, output_path=None):
     # Read Markdown
     with open(input_path, 'r', encoding='utf-8') as f:
         content = f.read()
+
+    # Pre-process: repair malformed tables from LLM output
+    content = repair_markdown_tables(content)
 
     # Parse and build
     elements = parse_markdown(content)
