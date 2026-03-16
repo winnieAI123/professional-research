@@ -191,6 +191,9 @@ _CN_ADR_MAP = {
     '趣头条': {'t': 'QTT', 'c': 'USD'},
 }
 
+# Reverse map: ADR ticker → Chinese name (for better Tavily search fallback)
+_ADR_TO_CN = {info['t']: cn_name for cn_name, info in _CN_ADR_MAP.items()}
+
 # HK ticker → US ADR ticker (for inputs like 0700.HK, 9988.HK)
 _HK_TO_ADR = {
     '0700.HK': 'TCEHY', '700.HK': 'TCEHY',
@@ -677,34 +680,49 @@ def collect_quarterly_data(company_name, ticker, quarter):
         if ir_url:
             result['press_release_url'] = ir_url
     
-    # Source 2 (Fallback): Tavily press release search
+    # Source 2 (Fallback): Tavily press release search with multi-query strategy
     if not pr_content:
-        print(f"    [Tavily] Searching press release...")
-        try:
-            tavily_resp = requests.post(
-                'https://api.tavily.com/search',
-                json={
-                    'api_key': TAVILY_API_KEY,
-                    'query': f'{company_name} {ticker} {quarter} earnings results revenue net income EPS',
-                    'max_results': 5, 'include_answer': True, 'search_depth': 'advanced',
-                }, timeout=30
-            )
-            tavily_resp.raise_for_status()
-            tavily_data = tavily_resp.json()
-            
-            pr_content = tavily_data.get('answer', '')
-            for r in tavily_data.get('results', [])[:3]:
-                pr_content += f"\n\n--- {r.get('url', '')} ---\n{r.get('content', '')}"
-                url = r.get('url', '')
-                if not result['press_release_url'] and any(k in url.lower() for k in ['investor', 'earnings', 'press', 'newswire']):
-                    result['press_release_url'] = url
-            
-            if not result['press_release_url'] and tavily_data.get('results'):
-                result['press_release_url'] = tavily_data['results'][0].get('url', '')
-            
-            print(f"    OK: Press release {len(pr_content)} chars")
-        except Exception as e:
-            print(f"    Warning: Tavily failed: {e}")
+        print(f"    [Tavily] Searching press release (multi-query)...")
+        cn_name = _ADR_TO_CN.get(ticker, company_name)
+        # Build multiple targeted queries (English + Chinese)
+        queries = [
+            f'{company_name} {ticker} {quarter} earnings results revenue net income EPS',
+        ]
+        # Add Chinese query for better coverage of HK/CN companies
+        if cn_name != company_name:
+            queries.append(f'{cn_name} {quarter or "最新"} 财报 业绩公告 收入 利润')
+        else:
+            queries.append(f'{company_name} {quarter or "latest"} quarterly results press release')
+        
+        for q_idx, query in enumerate(queries):
+            if pr_content:
+                break
+            try:
+                tavily_resp = requests.post(
+                    'https://api.tavily.com/search',
+                    json={
+                        'api_key': TAVILY_API_KEY,
+                        'query': query,
+                        'max_results': 5, 'include_answer': True, 'search_depth': 'advanced',
+                    }, timeout=30
+                )
+                tavily_resp.raise_for_status()
+                tavily_data = tavily_resp.json()
+                
+                pr_content = tavily_data.get('answer', '')
+                for r in tavily_data.get('results', [])[:3]:
+                    pr_content += f"\n\n--- {r.get('url', '')} ---\n{r.get('content', '')}"
+                    url = r.get('url', '')
+                    if not result['press_release_url'] and any(k in url.lower() for k in ['investor', 'earnings', 'press', 'newswire', 'meituan', 'tencent']):
+                        result['press_release_url'] = url
+                
+                if not result['press_release_url'] and tavily_data.get('results'):
+                    result['press_release_url'] = tavily_data['results'][0].get('url', '')
+                
+                if pr_content:
+                    print(f"    OK: Press release {len(pr_content)} chars (query #{q_idx+1})")
+            except Exception as e:
+                print(f"    Warning: Tavily query #{q_idx+1} failed: {e}")
     
     # Store raw PR content for direct use by report generator
     if pr_content:
@@ -1042,6 +1060,18 @@ def run_earnings_pipeline(companies, query="", output_dir=None):
         # Step 1
         print(f"\n  [1/4] Transcript...")
         transcript = fetch_transcript(sa_ticker)
+        
+        # Transcript freshness check: warn if transcript seems outdated
+        if transcript:
+            t_date = transcript.get('date', '')
+            if t_date:
+                try:
+                    t_age_days = (datetime.now() - datetime.strptime(t_date, '%Y-%m-%d')).days
+                    if t_age_days > 120:
+                        print(f"  ⚠️  Transcript is {t_age_days} days old ({t_date}). A newer quarter may exist but is not yet on Seeking Alpha.")
+                        print(f"      Will supplement with Tavily search for latest data.")
+                except ValueError:
+                    pass
         
         # Step 2
         ta = None

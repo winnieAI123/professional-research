@@ -16,6 +16,9 @@ yfinance>=0.2.30
 pdfplumber>=0.10.0
 PyPDF2>=3.0.0
 
+# Anti-Cloudflare (for Meituan IR page etc.)
+cloudscraper>=1.2.71
+
 # NAS full-text search index
 whoosh>=2.7.4
 

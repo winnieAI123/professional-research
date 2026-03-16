@@ -18,6 +18,15 @@ A template-driven, multi-source research framework that produces institutional-g
 > **Rule 3: No confirmation needed between phases.**
 > Phase 1 (data collection) → Phase 2 (chapter writing) → Phase 3 (Word output) should flow continuously without any user interaction. If you encounter errors, handle them silently (retry, fallback, or mark as "数据未找到") and keep going.
 
+> **Rule 4: Report content goes to FILES, not chat.**
+> Do NOT print the full report text in the chat window. Write each chapter's output to a file (or accumulate in memory), then assemble into a final `.md` file and convert to `.docx`. The user should receive **files**, not walls of Markdown text in the conversation.
+
+> **Rule 5: Use `md_to_word.py` for Word conversion — no DIY.**
+> You MUST call `python scripts/md_to_word.py --input report.md --output report.docx` for Word conversion. Do NOT write your own python-docx code. The standard script handles Markdown syntax cleanup (`**`, `##`, backticks, etc.) automatically. If `md_to_word.py` fails, use `save_report()` from `generate_report.py` as fallback.
+
+> **Rule 6: LLM-generated report text must be CLEAN prose.**
+> When generating chapter content via LLM, instruct the model to output **plain structured text** using Chinese numbering (一、二、三) and natural prose. Minimize Markdown syntax: use `##` ONLY for chapter headings (so `md_to_word.py` can parse them), but do NOT use `**bold**` markers in body text. Bold emphasis should be achieved through natural writing (e.g., explicit phrases like "关键发现：" or "核心指标："), not Markdown formatting.
+
 ## Core Mechanism
 
 **Templates drive everything.** Each research type has a dedicated MD template in `templates/`. Every run:
