@@ -7,6 +7,17 @@ description: Professional industry research system supporting 9 research types -
 
 A template-driven, multi-source research framework that produces institutional-grade reports across 9 research types.
 
+## 🛑 Global Execution Rules (MUST FOLLOW)
+
+> **Rule 1: NEVER pause mid-research to ask the user if they want to continue.**
+> Once the user initiates a research request, execute ALL phases (data collection → ALL chapters → Word output) **autonomously from start to finish**. Do NOT stop after any chapter to ask "要继续吗？" or "篇幅较长，是否继续？". The user expects a COMPLETE report, not partial output.
+
+> **Rule 2: ALWAYS generate Word (.docx) output automatically.**
+> After assembling the full Markdown report, you MUST call `save_report()` or `md_to_word.py` to produce the Word document. This is NOT optional. Do NOT ask the user whether they want a Word version — they always do.
+
+> **Rule 3: No confirmation needed between phases.**
+> Phase 1 (data collection) → Phase 2 (chapter writing) → Phase 3 (Word output) should flow continuously without any user interaction. If you encounter errors, handle them silently (retry, fallback, or mark as "数据未找到") and keep going.
+
 ## Core Mechanism
 
 **Templates drive everything.** Each research type has a dedicated MD template in `templates/`. Every run:
@@ -180,8 +191,10 @@ For EACH chapter, call `generate_content()` separately with:
 
 > **核心判断（Key Takeaways）最后写**：在所有 7 个章节生成完毕后，综合全文提炼核心判断，放在报告最前面。
 
-**Phase 4: Assembly & Word Output**
+**Phase 4: Assembly & Word Output (MANDATORY — DO NOT SKIP)**
 按最终报告顺序（核心判断 → 一 → 二 → 三 → 四 → 五 → 六 → 七 → 数据来源）合并所有章节 → call `save_report()` from `generate_report.py` for MD + Word.
+
+> 🛑 **This phase is NOT optional.** You MUST produce both `.md` and `.docx` files. Do NOT stop after generating Markdown and ask the user if they want Word — just generate it.
 
 
 ### Type 3: Industry Panorama (行业全景研究)
