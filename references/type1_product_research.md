@@ -125,13 +125,32 @@ Generate search queries targeting each dimension:
 
 ### 执行顺序
 
-产品研究必须按以下顺序执行，共 **15 个维度全部覆盖**：
+> 🚨 **Software 产品研究必须使用 Agent-Driven 逐章工作流**（详见 `skill.md` 的 Type 1 Software 部分）。
+> 禁止使用 `run_report_gen.py` 一次性生成。
 
 ```
-基础九维度（1-9）→ 深度六维度（10-15）→ 生成报告
+Phase 1: 模板解析
+  ├── 读取 templates/product_research_software.md（15 章）
+  ├── 读取本文件的搜索关键词模板
+  └── 识别产品类型 → 确定搜索策略
+
+Phase 2: 逐章数据采集（参照 skill.md 搜索策略表）
+  ├── 基础九维度（1-9）：产品定位 → 护城河
+  └── 深度六维度（10-15）：营销策略 → 风险与机会
+
+Phase 2.5: Gap Analysis（检查数据完整性，必要时补充搜索）
+
+Phase 3: 逐章报告生成（15 次独立 LLM 调用 + 写作风格指令）
+  └── 第 9 章（最终判断）最后写，综合前 14 章
+
+Phase 4: 拼接 + Word 输出
+  └── save_report() → MD + DOCX
 ```
 
-**禁止跳过任何章节**。如某维度数据确实无法获取，必须标注"未找到相关公开数据（截至搜索日期）"并说明尝试过的搜索渠道。
+**关键规则**：
+- 15 章 = 15 次独立 LLM 调用，绝不合并
+- 每次调用附带 skill.md 中的"软件产品写作风格指令"
+- 禁止跳过任何章节。数据不可得标注"未找到相关公开数据（截至搜索日期）"
 
 ### 推荐数据源
 
@@ -142,26 +161,6 @@ Generate search queries targeting each dimension:
 | 用户反馈 | App Store/Google Play 评论、微博、小红书 |
 | 行业报告 | 36氪研究院、艾瑞咨询、QuestMobile报告 |
 | 资本动态 | IT桔子、企名片、投资界、36氪融资快讯 |
-
-### Data Standardization Fields
-```json
-{
-  "product_name": "",
-  "product_type": "social/AI/tool/content/game",
-  "core_users": "",
-  "main_scenarios": [],
-  "key_differentiators": [],
-  "core_features": [],
-  "product_loop": "",
-  "hook_mechanism": {"trigger": "", "action": "", "reward": "", "investment": ""},
-  "growth_channels": [],
-  "retention_sources": [],
-  "monetization_model": "",
-  "metrics": {"mau": "", "dau": "", "growth_rate": "", "retention_rate": "", "arr": ""},
-  "moat": [],
-  "source_urls": []
-}
-```
 
 ---
 
@@ -198,10 +197,12 @@ From the service type, generate queries covering:
 
 ## Report Generation
 
-After collecting data, read the appropriate template fresh:
+> **Hardware and Software** sub-types use Agent-driven per-chapter workflows (see `skill.md`).
+> **Service** sub-type may still use `run_report_gen.py` for simpler reports.
+
+For Service reports:
 ```python
 from utils import read_template
-template = read_template("product_research_hardware.md")  # or software/service
+template = read_template("product_research_service.md")
 ```
-
-Then call `llm_client.generate_report_section()` with the template and collected data. The template structure drives the report format — Gemini must follow it exactly.
+Then call `llm_client.generate_report_section()` with template and collected data.

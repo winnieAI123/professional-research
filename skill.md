@@ -225,6 +225,93 @@ When user submits a research request, classify into one of 7 types using this de
 按最终报告顺序（Key Takeaways → 一 → 二 → 三 → 四 → 五 → 六 → 七 → 附录）合并所有章节 →
 调用 `save_report()` 输出 MD + Word。
 
+**🚨 MANDATORY: Software Sub-type — Agent-Driven 逐章写作工作流**
+
+> **NEVER** batch all 15 chapters into one `run_report_gen.py` call for Software product research.
+> 15 章共享 token 预算 = 每章内容被压缩 = 扁平 bullet list 泛滥。Software research **MUST** use the per-chapter workflow below.
+
+**Phase 1: 模板解析与产品定位**
+
+1. 读取 `templates/product_research_software.md` — 15 章模板
+2. 读取 `references/type1_product_research.md` — 获取搜索关键词模板
+3. 识别产品类型（社交 / AI / 工具 / 内容 / 游戏）→ 影响搜索策略
+
+**Phase 2: 逐章数据采集**
+
+按以下搜索策略表，对每章生成针对性 query 并收集数据：
+
+> **基础九维度（1-9）：**
+
+| 章节 | 搜索重点 | 示例 query | 搜索深度 |
+|------|---------|-----------|----------|
+| 1. 产品定位 | 产品简介、核心用户、场景 | `"[product]" "what is" core users scenario`, `"[产品]" 定位 用户 场景` | 轻（1-2组） |
+| 2. 核心玩法 | 核心功能、产品循环 | `"[product]" features functionality "how it works"`, `"[产品]" 核心功能 使用流程` | 中（2-3组） |
+| 3. 上瘾机制 | 用户粘性、Hook 模型 | `"[product]" engagement retention habit hook`, `"[产品]" 用户粘性 打开频次` | 轻（1-2组） |
+| 4. 增长机制 | 获客渠道、裂变传播 | `"[product]" user growth download "app store"`, `"[产品]" 用户增长 获客 裂变` | 中（2-3组） |
+| 5. 留存机制 | 留存数据、社区运营 | `"[product]" retention churn community`, `"[产品]" 留存率 用户流失` | 中（2-3组） |
+| 6. 商业模式 | 收入来源、定价策略 | `"[product]" revenue business model pricing subscription`, `"[产品]" 盈利 商业模式` | 中（2-3组） |
+| 7. 关键指标 | MAU/DAU/ARR/留存率 | `"[product]" MAU DAU revenue growth rate 2025`, `site:questmobile.com.cn "[产品]"` | 中（2-3组） |
+| 8. 护城河 | 竞争壁垒、网络效应 | `"[product]" competitive advantage moat network effect`, `"[产品]" 竞争壁垒` | 轻-中（1-2组） |
+| 9. 最终判断 | 最后写，无需搜索 | — | 无 |
+
+> **深度分析六维度（10-15）— 必须全部覆盖：**
+
+| 章节 | 搜索重点 | 示例 query | 搜索深度 |
+|------|---------|-----------|----------|
+| **10. 营销策略** | 营销案例、CAC、渠道 | `"[product]" marketing campaign strategy CAC`, `"[产品]" 营销 投放 获客成本` | **中-重（3-4组）** |
+| **11. 产品创新** | 功能更新、差异化玩法 | `"[product]" new features update changelog`, `"[产品]" 功能更新 创新 差异化` | **重（3-5组）** |
+| **12. 用户洞察** | 用户评论、留存驱动 | `"[product]" user reviews feedback "app store review"`, `"[产品]" 用户评价 口碑 吐槽` | **中-重（2-3组）** |
+| 13. 商业化深度 | 付费墙、广告、生态 | `"[product]" subscription pricing paywall "ad revenue"`, `"[产品]" 付费 订阅 广告` | 中（2-3组） |
+| 14. 行业动态 | 融资、合作、政策 | `"[product]" funding investment valuation`, `site:itjuzi.com "[产品]"` | 中（2-3组） |
+| 15. 风险与机会 | 监管、竞争、市场机会 | `"[product]" privacy regulation risk opportunity`, `"[产品]" 风险 监管` | 轻-中（1-2组） |
+
+每章数据收集规则：
+1. **Search**: 英文 + 中文各 1-2 条 query
+2. **Read full text**: 对 2-3 条最相关结果调用 `tavily_extract()` 获取全文
+3. **Extract**: 自己阅读全文，提取具体数字/事实 + 来源 URL
+4. **Move on**: 有数据 OR 确认不可得后才移下一章
+
+> **第 11 章（产品创新）通常是最重的**，需要搜产品更新日志、媒体评测、竞品对比。**第 12 章（用户洞察）** 需要搜 App Store 评论和社交媒体反馈。
+
+**Phase 2.5: Gap Analysis & Supplementary Search**
+
+> 15 章数据收集完成后，检查完整性：
+>
+> 1. **对照模板**：检查每章关键字段（MAU/DAU、营收、留存率、CAC、核心功能清单、竞品列表等）是否已有数据
+> 2. **判断缺失严重性**：
+>    - 缺失 ≥3 个关键字段 → 做 1-2 轮补充搜索
+>    - 缺失 <3 个 → 直接进 Phase 3
+> 3. **补充搜索最多 2 轮**，不要无限重试
+
+**Phase 3: Per-Chapter Report Generation（15 次独立 LLM 调用）**
+
+For EACH chapter, call `generate_content()` separately.每次调用必须附带以下写作风格指令：
+
+> **软件产品写作风格指令（Software 每次 LLM 调用必须附带）：**
+>
+> 你是一位资深互联网产品分析师，擅长新产品拆解与增长策略研究。请以分析师视角撰写产品研究报告，遵守以下风格：
+>
+> 1. **叙述分析为主，表格为辅**：模板中的表格是数据组织参考，不是必须填的空白表。每章先用 2-3 段分析性文字阐述核心洞察，再用表格呈现结构化数据。
+> 2. **子标题必须有**：每个章节下至少 2-3 个 `###` 子标题划分内容块。
+> 3. **关键发现开头**：每章第一段用 `>` 引用块写 1-2 句核心发现。
+> 4. **禁止扁平 bullet list**：如需列举，必须用加粗分类标题分组，每组前有说明性文字。
+> 5. **有限加粗**：关键数字和结论可加粗，每段最多 1-2 处。
+> 6. **Hook / 增长 / 留存分析要有框架感**：用 Nir Eyal Hook 模型（触发→行动→奖励→投入）或 AARRR 等框架组织分析，不要散点罗列。
+> 7. **用户洞察要引原话**：App Store/社媒评论直接引用用户原话增强可信度。
+> 8. **商业模式要算账**：付费率 × ARPU × MAU = 营收估算，不要只列定价。
+> 9. **竞品对比要有洞察**：不要做功能对比表就完事，分析差异化定位和护城河。
+> 10. **禁止空洞措辞**：不要"前景广阔"、"潜力巨大"，所有判断有数据支撑。
+> 11. **自然引用来源**：如"据 QuestMobile 数据"、"App Store 用户评论显示"。
+
+> **15 次调用，1 章 1 次。第 9 章（最终判断）最后写**，综合前 14 章提炼。
+
+**Phase 4: Assembly & Word Output (MANDATORY)**
+
+按模板顺序（1→2→…→15→数据来源→附录）合并所有章节 →
+调用 `save_report()` 输出 MD + Word。
+
+> 🛑 **This phase is NOT optional.** MUST produce both `.md` and `.docx`.
+
 ### Type 2: Company Research (公司研究)
 **Triggers**: User mentions a specific company name + "研究"/"分析"/"deep dive"
 **Sub-types**:
