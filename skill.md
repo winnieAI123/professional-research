@@ -759,6 +759,40 @@ print(f'Saved {len(papers)} papers')
 **Template**: `templates/financial_data_report.md`
 **Script**: `scripts/collect_financial_deep.py` (MUST use this script)
 
+**🛑 MANDATORY: Type 8A Execution Workflow**
+
+> ❌ **FORBIDDEN**: 禁止自己手动搜索财务数据再拼报告。脚本自动处理一切。
+> ❌ **FORBIDDEN**: 禁止跳过脚本直接用 web search 或 yfinance 拼凑数据。
+> ✅ **FIRST ACTION**: 收到请求后，你的第一个动作必须是运行脚本。
+
+**Phase 1: Run Script（第一步，必须先跑脚本）**
+
+从用户输入提取：公司名列表、查询内容、时间范围。然后运行：
+
+```bash
+cd "C:/Users/wangtian/.claude/skills/professional-research" && python scripts/collect_financial_deep.py --companies "公司1,公司2,公司3" --query "用户的查询内容" --years N --output "D:/clauderesult/claudeMMDD/"
+```
+
+> ⚠️ `--output` 用当天日期路径（如 `claude0317`）。
+> 脚本会自动完成：公司识别 → 数据源路由 → 数据提取 → JSON 保存 → Word 报告生成。
+
+**Phase 2: Review Output & Supplementary Search（脚本完成后检查）**
+
+1. **读 JSON**：检查 `extracted_data.json`，确认每家公司是否有数据
+2. **检查覆盖度**：
+   - 每家公司的目标年份是否全部覆盖？
+   - 关键指标（用户要求的：余额/收入/利润等）是否有数据？
+3. **补充搜索**（仅在脚本数据不足时）：
+   - 用 Tavily 或 web search 搜缺失的具体数据点
+   - 搜索结果手动补充到 Word 报告的分析段落中
+   - **最多 2 轮补充搜索**
+
+**Phase 3: Verify & Deliver**
+
+1. 确认 Word 报告已生成（`D:/clauderesult/claudeMMDD/` 下的 `.docx` 文件）
+2. 如果 Word 生成失败，手动用 `save_report()` 从 Markdown 生成
+3. 向用户报告：每家公司的数据源类型、覆盖年份、数据量
+
 **Sub-type B: Quarterly Earnings Analysis (季度业绩分析)**
 **Triggers**: User asks about **a single company's latest quarterly results**. Key phrases:
 - "财报分析", "季度业绩", "earnings", "Q1/Q2/Q3/Q4 results"
