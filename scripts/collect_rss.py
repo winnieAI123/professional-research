@@ -43,6 +43,7 @@ DEFAULT_FEEDS = {
 def load_feed_config() -> dict:
     """
     Load RSS feed URLs from config file.
+    Merges ai_labs + chinese_tech_media into flat {name: url} dict.
     Falls back to DEFAULT_FEEDS if config not found.
     """
     config_path = get_config_path("blog_feeds.json")
@@ -50,7 +51,13 @@ def load_feed_config() -> dict:
     if os.path.exists(config_path):
         try:
             with open(config_path, "r", encoding="utf-8") as f:
-                return json.load(f)
+                raw = json.load(f)
+            # Flatten: merge ai_labs + chinese_tech_media (skip arxiv_categories)
+            flat = {}
+            for section in ("ai_labs", "chinese_tech_media"):
+                if section in raw and isinstance(raw[section], dict):
+                    flat.update(raw[section])
+            return flat if flat else DEFAULT_FEEDS
         except Exception as e:
             print(f"  [Config Warning] {e}. Using defaults.")
     
