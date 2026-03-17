@@ -374,6 +374,153 @@ def collect_sec_edgar(company: dict, query: str, target_years: list, data_dir: s
     return _extract_from_html_files(html_paths, query, target_years, filings, collector, cik, raw_dir)
 
 
+def collect_sec_quarterly(company: dict, query: str, num_quarters: int, data_dir: str) -> dict:
+    """
+    SEC EDGAR quarterly pipeline: download recent 10-Q or 6-K filings → extract.
+    
+    For US domestic companies: 10-Q (standard quarterly report)
+    For foreign private issuers (e.g. Chinese ADRs): 6-K (interim reports)
+    
+    6-K filings contain various announcements, not all financial.
+    Strategy: download → check table count → only extract if financial.
+    """
+    ticker = company["ticker"]
+    annual_filing_type = company.get("filing_type", "20-F")
+    
+    # Determine quarterly filing type based on annual type
+    if annual_filing_type == "10-K":
+        quarterly_type = "10-Q"
+    else:
+        quarterly_type = "6-K"  # Foreign private issuers
+    
+    collector = SECCollector()
+    cik = collector.lookup_cik(ticker)
+    if not cik:
+        print(f"    ✗ Could not find CIK for {ticker}")
+        return None
+    
+    filings = collector.get_filings(cik, quarterly_type)
+    if not filings:
+        print(f"    ✗ No {quarterly_type} filings found")
+        return None
+    
+    print(f"    Found {len(filings)} {quarterly_type} filings, processing recent {num_quarters}...")
+    
+    raw_dir = os.path.join(data_dir, "raw", f"{ticker.lower()}_quarterly")
+    os.makedirs(raw_dir, exist_ok=True)
+    
+    quarterly_data = {}
+    quarterly_metadata = {"source": f"sec_edgar:{quarterly_type}", "period": "quarterly"}
+    extracted_count = 0
+    
+    # For 10-Q: straightforward, download and extract
+    # For 6-K: need to filter — only process filings with financial tables
+    candidates = filings[:num_quarters * 3] if quarterly_type == "6-K" else filings[:num_quarters]
+    
+    for filing in candidates:
+        if extracted_count >= num_quarters:
+            break
+        
+        path = collector.download_filing(cik, filing, raw_dir)
+        if not path:
+            continue
+        
+        # For 6-K: quick check if this filing has financial data
+        if quarterly_type == "6-K":
+            tables = _html_to_tables(path)
+            financial_keywords = ['revenue', 'income', 'profit', 'loss', 'balance',
+                                  'assets', 'liabilities', 'cash flow', 'earnings',
+                                  '收入', '利润', '资产', '负债']
+            has_financial = False
+            if len(tables) >= 5:
+                # Check if tables contain financial keywords
+                sample_text = ' '.join(t['markdown'][:200].lower() for t in tables[:10])
+                if any(kw in sample_text for kw in financial_keywords):
+                    has_financial = True
+            
+            if not has_financial:
+                continue  # Skip non-financial 6-K
+        
+        print(f"    [Q] Extracting: {os.path.basename(path)} ({filing['date']})")
+        
+        # Use same extraction pipeline (filter + extract)
+        tables = _html_to_tables(path)
+        if not tables:
+            continue
+        
+        relevant = _filter_tables(tables, query)
+        if not relevant:
+            continue
+        
+        # Extract with quarterly-aware prompt
+        result = _extract_quarterly_data(relevant, query, filing['date'])
+        if result and result.get("data"):
+            for group, metrics in result["data"].items():
+                q_group = f"[季度] {group}" if not group.startswith("[季度]") else group
+                if q_group not in quarterly_data:
+                    quarterly_data[q_group] = {}
+                for metric, periods in metrics.items():
+                    if metric not in quarterly_data[q_group]:
+                        quarterly_data[q_group][metric] = {}
+                    quarterly_data[q_group][metric].update(periods)
+            
+            extracted_count += 1
+            print(f"      ✓ Extracted quarterly data ({extracted_count}/{num_quarters})")
+    
+    if not quarterly_data:
+        print(f"    ⚠ No quarterly data extracted from {quarterly_type} filings")
+        return None
+    
+    print(f"    ✓ Quarterly total: {extracted_count} filings, {len(quarterly_data)} groups")
+    return {"data": quarterly_data, "metadata": quarterly_metadata}
+
+
+def _extract_quarterly_data(tables: list, query: str, filing_date: str) -> dict:
+    """Extract structured data from quarterly filings (10-Q / 6-K)."""
+    tables_text = ""
+    for t in tables:
+        tables_text += f"\n--- Table #{t['index']} (context: {t['context']}) ---\n{t['markdown']}\n"
+    
+    if len(tables_text) > 100000:
+        tables_text = tables_text[:100000]
+    
+    prompt = f"""从以下季度财务报表表格中提取结构化数据。
+
+用户需求: {query}
+报告日期: {filing_date}
+
+这是季度报告（10-Q 或 6-K），请注意：
+1. 提取各季度的数据
+2. 期间的key用"YYYY-QN"格式（如"2025-Q1", "2024-Q3"）
+3. 如果表格同时有季度和年累计数据，优先提取季度数据
+4. 找不到的不编造
+
+输出JSON格式:
+{{
+  "data": {{
+    "数据组名": {{
+      "指标名(English)": {{"2025-Q1": 值, "2024-Q4": 值, "2024-Q3": 值}}
+    }}
+  }},
+  "metadata": {{"unit": "单位", "filing_date": "{filing_date}"}}
+}}
+
+表格内容:
+{tables_text}"""
+    
+    result = generate_content(prompt=prompt, max_output_tokens=8000)
+    if not result:
+        return None
+    
+    try:
+        cleaned = result.strip().strip('```json').strip('```').strip()
+        parsed = json.loads(cleaned)
+        return _normalize_extracted_json(parsed)
+    except Exception as e:
+        print(f"      ✗ Quarterly JSON parse failed: {e}")
+        return None
+
+
 def _extract_from_html_files(html_paths, query, target_years, all_filings=None,
                               collector=None, cik=None, raw_dir=None) -> dict:
     """Two-round LLM extraction from SEC HTML filings."""
@@ -1024,12 +1171,24 @@ def generate_word_report(company_results: dict, query: str, years: int, output_d
                     run.font.name = 'Arial'
                     run.element.rPr.rFonts.set(qn('w:eastAsia'), 'SimSun')
     
-    # Part 2: Data Appendix Tables
-    doc.add_heading('二、详细数据附录', level=1)
+    # Part 2: Data Appendix Tables (Annual)
+    doc.add_heading('二、详细年度数据附录', level=1)
     
     appendix_letter = ord('A')
+    has_quarterly = False
+    
     for company_name, result in company_results.items():
         if not result or not result.get("data"):
+            continue
+        
+        # Split data into annual and quarterly groups
+        annual_groups = {k: v for k, v in result["data"].items() if not k.startswith("[季度]")}
+        quarterly_groups = {k: v for k, v in result["data"].items() if k.startswith("[季度]")}
+        
+        if quarterly_groups:
+            has_quarterly = True
+        
+        if not annual_groups:
             continue
         
         doc.add_heading(f'附录{chr(appendix_letter)}: {company_name}', level=2)
@@ -1040,17 +1199,17 @@ def generate_word_report(company_results: dict, query: str, years: int, output_d
             p = doc.add_paragraph(f'单位: {unit}')
             p.runs[0].bold = True
         
-        for group_name, metrics in result["data"].items():
+        for group_name, metrics in annual_groups.items():
             # Show unit in section heading
             heading_text = f'{group_name}（单位: {unit}）' if unit else group_name
             doc.add_heading(heading_text, level=3)
             
-            # Collect all years from leaf-level data only
+            # Collect all years from leaf-level data only (4-digit year keys)
             all_years = sorted(set(
                 str(y) for m in metrics.values()
                 if isinstance(m, dict)
                 for y in m.keys()
-                if re.match(r'^\d{4}$', str(y))  # Only 4-digit year keys
+                if re.match(r'^\d{4}$', str(y))
             ), reverse=True)
             
             if not all_years:
@@ -1073,7 +1232,6 @@ def generate_word_report(company_results: dict, query: str, years: int, output_d
             for metric_name, years_data in metrics.items():
                 if not isinstance(years_data, dict):
                     continue
-                # Skip if this metric has no year-keyed data
                 year_keys = [k for k in years_data.keys() if re.match(r'^\d{4}$', str(k))]
                 if not year_keys:
                     continue
@@ -1090,8 +1248,72 @@ def generate_word_report(company_results: dict, query: str, years: int, output_d
             
             doc.add_paragraph()  # spacing
     
+    # Part 2b: Quarterly Data (if available)
+    if has_quarterly:
+        doc.add_heading('三、最新季度数据', level=1)
+        
+        for company_name, result in company_results.items():
+            if not result or not result.get("data"):
+                continue
+            
+            quarterly_groups = {k: v for k, v in result["data"].items() if k.startswith("[季度]")}
+            if not quarterly_groups:
+                continue
+            
+            doc.add_heading(f'{company_name} — 季度数据', level=2)
+            
+            for group_name, metrics in quarterly_groups.items():
+                # Remove [季度] prefix for display
+                display_name = group_name.replace("[季度] ", "").replace("[季度]", "")
+                doc.add_heading(display_name, level=3)
+                
+                # Collect all quarter keys (YYYY-QN format)
+                all_periods = sorted(set(
+                    str(p) for m in metrics.values()
+                    if isinstance(m, dict)
+                    for p in m.keys()
+                    if re.match(r'^\d{4}-Q\d$', str(p))
+                ), reverse=True)
+                
+                if not all_periods:
+                    continue
+                
+                headers = ['指标'] + all_periods
+                table = doc.add_table(rows=1, cols=len(headers))
+                table.style = 'Table Grid'
+                
+                for i, h in enumerate(headers):
+                    cell = table.rows[0].cells[i]
+                    cell.text = h
+                    run = cell.paragraphs[0].runs[0]
+                    run.bold = True
+                    run.font.size = Pt(9)
+                    run.font.name = 'Arial'
+                    run.element.rPr.rFonts.set(qn('w:eastAsia'), 'SimSun')
+                
+                for metric_name, periods_data in metrics.items():
+                    if not isinstance(periods_data, dict):
+                        continue
+                    quarter_keys = [k for k in periods_data.keys() if re.match(r'^\d{4}-Q\d$', str(k))]
+                    if not quarter_keys:
+                        continue
+                    
+                    row = table.add_row()
+                    row.cells[0].text = metric_name
+                    _set_cell_font(row.cells[0])
+                    
+                    for i, period in enumerate(all_periods, 1):
+                        val = periods_data.get(period, "")
+                        cell = row.cells[i]
+                        cell.text = _flatten_value(val)
+                        _set_cell_font(cell)
+                
+                doc.add_paragraph()  # spacing
+    
     # Part 3: Data Source Description
-    doc.add_heading('三、数据来源说明', level=1)
+    # Part N: Data Source Description (numbering depends on whether quarterly exists)
+    source_part = '四' if has_quarterly else '三'
+    doc.add_heading(f'{source_part}、数据来源说明', level=1)
     
     source_descriptions = {
         'sec_edgar': 'SEC EDGAR 美国证券交易委员会电子数据库（年报 20-F/10-K 表格提取）',
@@ -1258,6 +1480,30 @@ def run_pipeline(companies: list, query: str, years: int = 5, output_dir: str = 
                         print(f"  ✓ Web search supplemented years: {recent_missing}")
                     else:
                         print(f"  ⚠ Web search found no data for {recent_missing} (annual report not yet available)")
+            
+            # === Quarterly Data Supplement (SEC path only) ===
+            # For SEC-sourced companies, also collect recent 5 quarters
+            if source == "sec_edgar" and result and result.get("data"):
+                print(f"\n  [Quarterly] Collecting recent 5 quarters for {name}...")
+                try:
+                    quarterly_result = collect_sec_quarterly(company, query, 5, data_dir)
+                    if quarterly_result and quarterly_result.get("data"):
+                        # Merge quarterly data into existing result
+                        for group, metrics in quarterly_result["data"].items():
+                            if group not in result["data"]:
+                                result["data"][group] = {}
+                            for metric, periods in metrics.items():
+                                if metric not in result["data"][group]:
+                                    result["data"][group][metric] = {}
+                                result["data"][group][metric].update(periods)
+                        
+                        result["metadata"]["has_quarterly"] = True
+                        quarterly_groups = len(quarterly_result["data"])
+                        print(f"  ✓ Quarterly data added: {quarterly_groups} groups")
+                    else:
+                        print(f"  ⚠ No quarterly data available")
+                except Exception as e:
+                    print(f"  ⚠ Quarterly collection failed: {e}")
             
             if result and result.get("data"):
                 groups = list(result["data"].keys())

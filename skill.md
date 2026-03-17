@@ -774,7 +774,7 @@ cd "C:/Users/wangtian/.claude/skills/professional-research" && python scripts/co
 ```
 
 > ⚠️ `--output` 用当天日期路径（如 `claude0317`）。
-> 脚本会自动完成：公司识别 → 数据源路由 → 数据提取 → JSON 保存 → Word 报告生成。
+> 脚本会自动完成：公司识别 → 数据源路由 → 年报数据提取 → **SEC 公司自动追加最近 5 个季度数据（10-Q/6-K）** → JSON 保存 → Word 报告生成。
 
 **Phase 2: Review Output & Supplementary Search（脚本完成后检查）**
 
@@ -782,6 +782,7 @@ cd "C:/Users/wangtian/.claude/skills/professional-research" && python scripts/co
 2. **检查覆盖度**：
    - 每家公司的目标年份是否全部覆盖？
    - 关键指标（用户要求的：余额/收入/利润等）是否有数据？
+   - SEC 公司：是否有季度数据？（`[季度]` 前缀的数据组）
 3. **最新年份特别关注**：
 
 > **脚本已内置最新年份 fallback**：如果主路径（SEC/PDF/EastMoney）拿不到最近 1-2 年的数据（年报未发布），脚本会自动追加 web search 补充。
@@ -795,8 +796,9 @@ cd "C:/Users/wangtian/.claude/skills/professional-research" && python scripts/co
 **Phase 3: Verify & Deliver**
 
 1. 确认 Word 报告已生成（`D:/clauderesult/claudeMMDD/` 下的 `.docx` 文件）
-2. 如果 Word 生成失败，手动用 `save_report()` 从 Markdown 生成
-3. 向用户报告：每家公司的数据源类型、覆盖年份、数据量
+2. 报告结构应包含：二、详细年度数据附录 + 三、最新季度数据（如有） + 数据来源说明
+3. 如果 Word 生成失败，手动用 `save_report()` 从 Markdown 生成
+4. 向用户报告：每家公司的数据源类型、覆盖年份、季度覆盖范围、数据量
 
 **Sub-type B: Quarterly Earnings Analysis (季度业绩分析)**
 **Triggers**: User asks about **a single company's latest quarterly results**. Key phrases:
