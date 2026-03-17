@@ -48,8 +48,13 @@ A template-driven, multi-source research framework that produces institutional-g
 > 3. Re-run `md_to_word.py`
 > 4. Only if all retries fail: use `save_report()` from `generate_report.py` as final fallback
 
-> **Rule 6: LLM-generated report text must be CLEAN prose.**
-> When generating chapter content via LLM, instruct the model to output **plain structured text** using Chinese numbering (一、二、三) and natural prose. Minimize Markdown syntax: use `##` ONLY for chapter headings (so `md_to_word.py` can parse them), but do NOT use `**bold**` markers in body text. Bold emphasis should be achieved through natural writing (e.g., explicit phrases like "关键发现：" or "核心指标："), not Markdown formatting.
+> **Rule 6: LLM-generated report must have CLEAR VISUAL HIERARCHY.**
+> When generating chapter content via LLM:
+> - **子标题（MUST）**：每个 `## 章节标题` 下必须有 2-4 个 `###` 子标题划分内容块（如 `### 3.1 产品矩阵`、`### 3.2 技术架构`）。长章节（>2000字）还应使用 `####` 做更细分的块。**不要输出一大段没有子标题的纯文字墙。**
+> - **关键发现引用块（MUST）**：每章开头用 `>` 引用块写 1-2 句核心结论（如 `> 关键发现：公司 2025 年营收增长 47%，主要受 API 业务驱动`），让读者快速抓住本章要点。
+> - **有限加粗（ALLOWED）**：允许对关键数字和结论性判断使用 `**bold**`（如"营收达到 **12.8 亿元**"），但每段最多 1-2 处，禁止整行加粗，禁止滥用。
+> - **章节标题**：使用 `##` 格式（`md_to_word.py` 依赖此解析）。
+> - **中文编号**：章节使用中文编号（一、二、三），子标题可用阿拉伯数字（3.1、3.2）。
 
 > **Rule 7: All LLM calls MUST go through `scripts/llm_client.py` — no inline Gemini SDK code.**
 > You MUST use one of these functions for all LLM calls:
@@ -311,6 +316,9 @@ For EACH chapter, call `generate_content()` separately with:
 > 5. **风险分析要具体**：每个风险要有触发条件 -> 影响路径 -> 量化影响估计 -> 缓解措施的完整逻辑链。
 > 6. **禁止空洞措辞**：不要用"具有较大发展潜力"、"市场前景广阔"。所有判断必须有数据支撑或逻辑推导。
 > 7. **自然引用来源**：关键数据在正文中自然注明（如"据 Crunchbase 数据"、"FCA 注册记录确认"），URL 集中在末尾 DATA SOURCES。
+> 8. **子标题必须有**：每个 `##` 章节下至少用 2-4 个 `###` 子标题划分内容块。不要输出一大段没有子标题的文字墙。
+> 9. **关键发现开头**：每章第一段用 `>` 引用块写 1-2 句核心结论（如 `> 关键发现：公司已获 FCA 和 MAS 双牌照，合规成本占运营支出约 15%`），让读者快速抓住要点。
+> 10. **有限加粗**：允许对关键数字和结论性判断加粗（如"TPV 达到 **28 亿美元**"），每段最多 1-2 处，禁止整行加粗。
 
 > **NEVER generate the entire report in one LLM call.** Tech = 7 calls, Finance = 12 calls. One call per chapter.
 
