@@ -75,6 +75,14 @@ A template-driven, multi-source research framework that produces institutional-g
 > ```
 > ⛔ Do NOT write inline `google.genai` / `client.models.generate_content()` code. `llm_client.py` has a **4-model fallback chain** (gemini-2.5-pro → 3.1-pro → 3-pro → 2.5-flash) that automatically handles 503/429 errors. Bypassing it = no fallback = crash on any API hiccup.
 
+> **Rule 8: Do NOT create custom generation scripts — follow the Phase workflow INLINE.**
+> 你不能自己写 `generate_xxx_chapters.py` 之类的自定义脚本来生成报告。必须按 Phase 1→2→2.5→3→4 工作流**逐步执行**：
+> - Phase 2: 每章逐个搜索 + 收集数据
+> - Phase 3: 每章**单独一次** `generate_content()` 调用，直接在 Agent 会话中 inline 执行
+> - **绝对不要**把多章打包到一个脚本里一次性跑（如把 1-2 章或 3-6 章合并到一个 LLM 调用）
+>
+> 原因：多章合并 = 共享 token 预算 = 每章内容被压缩 = 报告质量下降。1 章 1 次 LLM 调用是硬性要求。
+
 ## Core Mechanism
 
 **Templates drive everything.** Each research type has a dedicated MD template in `templates/`. Every run:
