@@ -782,10 +782,15 @@ cd "C:/Users/wangtian/.claude/skills/professional-research" && python scripts/co
 2. **检查覆盖度**：
    - 每家公司的目标年份是否全部覆盖？
    - 关键指标（用户要求的：余额/收入/利润等）是否有数据？
-3. **补充搜索**（仅在脚本数据不足时）：
-   - 用 Tavily 或 web search 搜缺失的具体数据点
-   - 搜索结果手动补充到 Word 报告的分析段落中
-   - **最多 2 轮补充搜索**
+3. **最新年份特别关注**：
+
+> **脚本已内置最新年份 fallback**：如果主路径（SEC/PDF/EastMoney）拿不到最近 1-2 年的数据（年报未发布），脚本会自动追加 web search 补充。
+> 
+> 但如果脚本的 web search 补充仍不够，**Agent 必须手动补充**：
+> - 用 Tavily MCP、Google Search MCP 或原生 web search 搜索 `"[公司名] 2025年 收入 利润 业绩"`
+> - 搜索最新的季度业绩报告、监管披露、新闻报道
+> - 将搜到的数据补充到报告分析段落中，并标注`（来源：网络搜索，数据可靠性：medium）`
+> - **最多 2 轮补充搜索**，搜不到就在报告中注明"截至报告日期，该年度财务数据尚未正式披露"
 
 **Phase 3: Verify & Deliver**
 

@@ -1219,6 +1219,46 @@ def run_pipeline(companies: list, query: str, years: int = 5, output_dir: str = 
             
             company_results[name] = result
             
+            # === Latest-Year Web Search Fallback ===
+            # If primary source missed recent years (annual report not yet published),
+            # automatically supplement with web search data.
+            if result and result.get("data") and source != "web_search":
+                found_years = set()
+                for group in result["data"].values():
+                    for metric in group.values():
+                        if isinstance(metric, dict):
+                            found_years.update(str(y) for y in metric.keys())
+                
+                # Only supplement recent missing years (current year and last year)
+                recent_threshold = current_year - 1  # e.g., 2025 if current is 2026
+                recent_missing = [
+                    str(y) for y in target_years 
+                    if str(y) not in found_years and y >= recent_threshold
+                ]
+                
+                if recent_missing:
+                    print(f"\n  [Fallback] Missing recent years {recent_missing} — supplementing with web search...")
+                    web_company = {"name": name, "search_name": name}
+                    web_result = collect_web_search(web_company, query, [int(y) for y in recent_missing])
+                    
+                    if web_result and web_result.get("data"):
+                        # Merge web data into existing result (don't overwrite existing data)
+                        for group, metrics in web_result["data"].items():
+                            if group not in result["data"]:
+                                result["data"][group] = {}
+                            for metric, years in metrics.items():
+                                if metric not in result["data"][group]:
+                                    result["data"][group][metric] = {}
+                                for year, val in years.items():
+                                    if year not in result["data"][group][metric]:
+                                        result["data"][group][metric][year] = val
+                        
+                        # Tag the supplemented data source
+                        result["metadata"]["web_supplemented_years"] = recent_missing
+                        print(f"  ✓ Web search supplemented years: {recent_missing}")
+                    else:
+                        print(f"  ⚠ Web search found no data for {recent_missing} (annual report not yet available)")
+            
             if result and result.get("data"):
                 groups = list(result["data"].keys())
                 total_metrics = sum(len(m) for g in result["data"].values() for m in g.values() if isinstance(m, dict))
