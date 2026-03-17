@@ -86,6 +86,21 @@ A template-driven, multi-source research framework that produces institutional-g
 
 This means users only need to edit template MD files to change report format/structure — no code changes needed.
 
+**Search Priority Chain（通用搜索优先级）：**
+
+> Agent 在执行搜索时，按以下优先级选择搜索工具：
+>
+> 1. **Tavily MCP** ← 首选（搜索质量高 + 支持 `tavily_extract` 全文提取）
+> 2. **Google Search MCP** ← Tavily 不可用时 fallback
+> 3. **原生 web search** ← 以上 MCP 都不可用时的兜底
+>
+> **专用数据源（与上述并行，不是 fallback）：**
+> - Twitter 数据 → 必须用 `collect_twitter.py` 脚本（无 MCP 替代）
+> - Substack 数据 → 必须用 `collect_substack.py` 脚本（无 MCP 替代）
+> - arXiv 论文 → 必须用 `collect_arxiv.py` 脚本
+> - 上市公司财务 → 必须用 `collect_financials.py` 脚本
+> - 财报 Transcript → 必须用 `collect_earnings.py` 脚本（Seeking Alpha API）
+
 ## Prerequisites
 
 ### API Keys (via Environment Variables — NEVER hardcode)
