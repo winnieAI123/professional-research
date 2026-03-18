@@ -526,16 +526,13 @@ def build_document(elements):
 
         elif elem_type == 'olist':
             for item in elem[1]:
-                p = doc.add_paragraph(item, style='List Number')
-                for run in p.runs:
-                    set_font(run)
+                p = doc.add_paragraph(style='List Number')
+                add_rich_text(p, item)
 
         elif elem_type == 'blockquote':
-            p = doc.add_paragraph(elem[1])
+            p = doc.add_paragraph()
             p.paragraph_format.left_indent = Inches(0.5)
-            for run in p.runs:
-                set_font(run)
-                run.italic = True
+            add_rich_text(p, elem[1], default_color=RGBColor(0x55, 0x55, 0x55))
 
         elif elem_type == 'hr':
             # Add a blank line as separator
