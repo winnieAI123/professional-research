@@ -1509,6 +1509,19 @@ def run_pipeline(companies: list, query: str, years: int = 5, output_dir: str = 
             else:
                 result = None
             
+            # === Primary Source Failure Fallback ===
+            # If primary source failed entirely (e.g. SEC 503, PDF download error),
+            # fall back to web search so the company doesn't get zero data.
+            if not result or not result.get("data"):
+                if source != "web_search":
+                    print(f"\n  [Fallback] Primary source '{source}' returned no data — trying web search...")
+                    result = collect_web_search({"name": name, "search_name": name}, query, target_years)
+                    if result and result.get("data"):
+                        result["metadata"]["source"] = f"web_search (fallback from {source})"
+                        print(f"  ✓ Web search fallback succeeded")
+                    else:
+                        print(f"  ✗ Web search fallback also failed")
+            
             # Ensure metadata has source type for report footer
             if result and isinstance(result, dict):
                 if 'metadata' not in result:
