@@ -101,6 +101,34 @@ All opinions (from any source) are normalized to:
 }
 ```
 
+## Data Persistence (Mandatory)
+
+After all opinions are extracted, save them to a JSON file in the output directory **before** generating the report:
+
+```python
+import json
+from datetime import datetime
+
+opinions_data = {
+    "topic": "[研究主题]",
+    "date": datetime.now().strftime("%Y-%m-%d"),
+    "sources": {
+        "twitter": len(twitter_opinions),
+        "substack": len(substack_opinions),
+        "web": len(web_opinions),
+    },
+    "opinions": all_opinions,  # List of standardized opinion dicts
+}
+
+with open(f"{output_dir}/opinions_{topic_short}_{date}.json", "w", encoding="utf-8") as f:
+    json.dump(opinions_data, f, ensure_ascii=False, indent=2)
+```
+
+This file serves as:
+1. **Audit trail** — verify which sources were actually read
+2. **Debug tool** — check if stance classification is accurate
+3. **Reuse** — regenerate report without re-collecting data
+
 ## Report Generation
 
 ### Key Sections in Template
