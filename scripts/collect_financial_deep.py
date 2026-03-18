@@ -294,10 +294,19 @@ class SECCollector:
         self._last_request = time.time()
     
     def _get(self, url):
-        self._rate_limit()
-        resp = self.session.get(url, timeout=30)
-        resp.raise_for_status()
-        return resp.json()
+        for attempt in range(3):
+            self._rate_limit()
+            try:
+                resp = self.session.get(url, timeout=30)
+                resp.raise_for_status()
+                return resp.json()
+            except requests.exceptions.HTTPError as e:
+                if resp.status_code in (503, 429) and attempt < 2:
+                    wait = [5, 15, 30][attempt]
+                    print(f"      [SEC] {resp.status_code} on attempt {attempt+1}, retrying in {wait}s...")
+                    time.sleep(wait)
+                else:
+                    raise
     
     def lookup_cik(self, ticker: str) -> str:
         data = self._get('https://www.sec.gov/files/company_tickers.json')
@@ -327,13 +336,22 @@ class SECCollector:
             return filepath
         
         url = f"https://www.sec.gov/Archives/edgar/data/{cik}/{accession}/{filing['primary_doc']}"
-        self._rate_limit()
-        resp = self.session.get(url, timeout=60)
-        resp.raise_for_status()
-        os.makedirs(output_dir, exist_ok=True)
-        with open(filepath, 'w', encoding='utf-8') as f:
-            f.write(resp.text)
-        return filepath
+        for attempt in range(3):
+            self._rate_limit()
+            try:
+                resp = self.session.get(url, timeout=60)
+                resp.raise_for_status()
+                os.makedirs(output_dir, exist_ok=True)
+                with open(filepath, 'w', encoding='utf-8') as f:
+                    f.write(resp.text)
+                return filepath
+            except requests.exceptions.HTTPError as e:
+                if resp.status_code in (503, 429) and attempt < 2:
+                    wait = [5, 15, 30][attempt]
+                    print(f"      [SEC] {resp.status_code} downloading {filename}, retry in {wait}s...")
+                    time.sleep(wait)
+                else:
+                    raise
 
 
 def collect_sec_edgar(company: dict, query: str, target_years: list, data_dir: str) -> dict:
