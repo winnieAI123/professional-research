@@ -652,15 +652,42 @@ that contain data relevant to the user's query. Return a JSON array of numbers.
 
 
 def _extract_structured_data(tables: list, query: str, target_years: list) -> dict:
-    """Round 2: Use Pro model to extract structured JSON data."""
-    tables_text = ""
+    """Round 2: Use Pro model to extract structured JSON data.
+    Splits into batches if total table text exceeds 30K chars to avoid
+    output truncation (89K prompt → model runs out of output window).
+    """
+    BATCH_CHAR_LIMIT = 25000  # Keep prompt under 30K to leave room for output
+    
+    # Build batches
+    batches = []
+    current_batch = []
+    current_chars = 0
+    
     for t in tables:
-        tables_text += f"\n--- Table #{t['index']} (context: {t['context']}) ---\n{t['markdown']}\n"
+        t_len = len(t['markdown']) + len(t.get('context', '')) + 50
+        if current_chars + t_len > BATCH_CHAR_LIMIT and current_batch:
+            batches.append(current_batch)
+            current_batch = []
+            current_chars = 0
+        current_batch.append(t)
+        current_chars += t_len
+    if current_batch:
+        batches.append(current_batch)
     
-    if len(tables_text) > 100000:
-        tables_text = tables_text[:100000]
+    if len(batches) > 1:
+        print(f"      Splitting {len(tables)} tables into {len(batches)} batches")
     
-    prompt = f"""从以下财务报表表格中提取结构化数据。
+    all_data = {}
+    all_metadata = {}
+    
+    for batch_idx, batch_tables in enumerate(batches):
+        tables_text = ""
+        for t in batch_tables:
+            tables_text += f"\n--- Table #{t['index']} (context: {t['context']}) ---\n{t['markdown']}\n"
+        
+        batch_label = f"[Batch {batch_idx+1}/{len(batches)}] " if len(batches) > 1 else ""
+        
+        prompt = f"""从以下财务报表表格中提取结构化数据。
 
 用户需求: {query}
 目标年份: {target_years}
@@ -690,13 +717,69 @@ def _extract_structured_data(tables: list, query: str, target_years: list) -> di
 表格内容:
 {tables_text}"""
 
-    result = generate_content(prompt=prompt, max_output_tokens=8000)
+        result = generate_content(prompt=prompt, max_output_tokens=8000)
+        if not result:
+            print(f"      {batch_label}✗ Empty response")
+            continue
+        
+        parsed = _try_parse_json(result)
+        if parsed and parsed.get("data"):
+            for group, metrics in parsed["data"].items():
+                if group not in all_data:
+                    all_data[group] = {}
+                for metric, years in metrics.items():
+                    if isinstance(years, dict):
+                        if metric not in all_data[group]:
+                            all_data[group][metric] = {}
+                        all_data[group][metric].update(years)
+            if parsed.get("metadata"):
+                all_metadata.update(parsed["metadata"])
+            metrics_count = sum(len(m) for g in parsed["data"].values() for m in g.values() if isinstance(m, dict))
+            print(f"      {batch_label}✓ {metrics_count} data points extracted")
+        else:
+            print(f"      {batch_label}✗ Extraction failed")
+    
+    return {"data": all_data, "metadata": all_metadata} if all_data else None
+
+
+def _try_parse_json(raw: str) -> dict:
+    """Try to parse JSON from LLM output with repair for common issues."""
+    cleaned = raw.strip().strip('```json').strip('```').strip()
+    
+    # Attempt 1: Direct parse
     try:
-        cleaned = result.strip().strip('```json').strip('```').strip()
         return json.loads(cleaned)
-    except Exception as e:
-        print(f"      ✗ JSON parse failed: {e}")
-        return None
+    except json.JSONDecodeError:
+        pass
+    
+    # Attempt 2: Fix truncated JSON by closing unclosed braces
+    try:
+        open_braces = cleaned.count('{') - cleaned.count('}')
+        open_brackets = cleaned.count('[') - cleaned.count(']')
+        if open_braces > 0 or open_brackets > 0:
+            # Remove last incomplete line
+            last_newline = cleaned.rfind('\n')
+            if last_newline > len(cleaned) * 0.5:
+                truncated = cleaned[:last_newline]
+            else:
+                truncated = cleaned
+            # Close brackets and braces
+            truncated += ']' * max(0, open_brackets) + '}' * max(0, open_braces)
+            parsed = json.loads(truncated)
+            print(f"      ⚠ Repaired truncated JSON (closed {open_braces} braces)")
+            return _normalize_extracted_json(parsed)
+    except json.JSONDecodeError:
+        pass
+    
+    # Attempt 3: Remove trailing commas
+    try:
+        fixed = re.sub(r',\s*([}\]])', r'\1', cleaned)
+        return json.loads(fixed)
+    except json.JSONDecodeError:
+        pass
+    
+    # Attempt 4: Ask LLM to reformat
+    return _try_reformat_response(raw)
 
 
 # ============================================================
