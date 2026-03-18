@@ -160,3 +160,44 @@ The Agent should:
 2. For EACH of the 8 chapters: feed that chapter's template + relevant data subset → `generate_content()` → get chapter output
 3. Concatenate in order → `save_report()` for MD + Word
 
+## Quality Gate (Mandatory)
+
+### Per-Chapter Minimum Length
+
+Every chapter MUST meet the following minimum word count. If below threshold, **immediately regenerate** with the same data — do NOT proceed to assembly.
+
+| Chapter | Minimum | If Too Short |
+|---------|---------|-------------|
+| 一、研究背景 | 400 字 | 补充市场数据和玩家信息 |
+| 二、KOL 观点图谱 | 600 字 | 确保表格完整 + 至少 5 条推文 |
+| 三、深度分析 | 800 字 | 每个立场至少 2 人深度展开 |
+| 四、核心分歧点 | 400 字 | 至少 3 个争议焦点 |
+| 五、时间线预判 | 300 字 | 短/中/长期各有论据 |
+| 六、竞争格局 | 400 字 | 至少 5 个玩家 |
+| 七、机会窗口 | 300 字 | 至少 3 个机会 |
+| 八、信号监测 | 200 字 | 至少 4 个信号 |
+
+### Retry Rule
+
+```
+if len(chapter_text) < minimum:
+    # 重新生成，在 prompt 中：
+    # 1. 包含该章节的所有原始采集数据
+    # 2. 明确说"上次输出太短，请完整展开"
+    # 3. 最多重试 2 次
+```
+
+### Writing Standards
+
+1. **专业简洁**：用行业分析师的语言，不要水话、不要重复
+2. **逻辑完整**：每个观点必须有「论点 → 论据 → 来源」的完整链条
+3. **数据驱动**：所有结论必须引用具体数据（互动量、时间、数字）
+4. **不编造**：没有数据支撑的观点宁可不写，绝不凭空生成
+5. **表格优先**：能用表格呈现的信息不要用长段落
+
+### Assembly Rule
+
+组装报告时：
+- **禁止**发现内容太短后自己写脚本重新生成
+- 应该逐章检查 → 识别不达标章节 → 用原始数据重新调 LLM 生成该章节
+- 所有章节达标后再组装
