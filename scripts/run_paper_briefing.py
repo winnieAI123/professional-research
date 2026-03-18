@@ -32,6 +32,28 @@ from generate_paper_briefing import generate_paper_briefing_word
 
 
 # ============================================================
+# LaTeX Cleanup
+# ============================================================
+
+def _clean_latex(text: str) -> str:
+    """Strip LaTeX math notation from text for clean Word output."""
+    import re
+    # Remove $...$ inline math markers, keep content
+    text = re.sub(r'\$([^$]+)\$', r'\1', text)
+    # Remove common LaTeX commands
+    text = re.sub(r'\\mathbb\{([^}]+)\}', r'\1', text)
+    text = re.sub(r'\\mathcal\{([^}]+)\}', r'\1', text)
+    text = re.sub(r'\\text\{([^}]+)\}', r'\1', text)
+    text = re.sub(r'\\textit\{([^}]+)\}', r'\1', text)
+    text = re.sub(r'\\textbf\{([^}]+)\}', r'\1', text)
+    text = re.sub(r'\\[a-zA-Z]+\{([^}]+)\}', r'\1', text)  # generic \cmd{content}
+    text = re.sub(r'\\[a-zA-Z]+', '', text)  # standalone \commands
+    # Clean up extra spaces
+    text = re.sub(r'  +', ' ', text)
+    return text.strip()
+
+
+# ============================================================
 # Research Focus Areas & Keywords
 # ============================================================
 
@@ -159,6 +181,7 @@ SUMMARY_PROMPT = """请将以下英文论文摘要翻译为中文。
 - 忠实翻译原文，不要删减、改写或"总结"
 - 保留所有技术术语，首次出现时括号附上英文原文
 - 保留所有数字、百分比和实验结果
+- 数学公式用纯文本表达（如 "N维环面" 而不是 "$\mathbb{T}^N$"），禁止输出任何 LaTeX 符号
 - 直接输出翻译正文，不要加"摘要："等前缀
 
 论文标题: {title}
@@ -184,7 +207,7 @@ def generate_summaries(papers: list) -> list:
                 model="models/gemini-3-flash-preview",
                 max_output_tokens=2048,
             )
-            paper["summary"] = summary.strip() if summary else ""
+            paper["summary"] = _clean_latex(summary.strip()) if summary else ""
         except Exception as e:
             print(f"  [Paper {i+1}] Summary failed: {e}")
             paper["summary"] = f"[摘要生成失败] {paper.get('abstract', '')[:300]}"
