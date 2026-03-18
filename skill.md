@@ -718,17 +718,18 @@ print(f'Saved {len(papers)} papers')
 **Triggers**: "论文", "paper", "arXiv", "学术", "前沿技术", "academic", "research papers", "学术日报"
 **Data sources**: arXiv RSS, AI Lab blogs (Google AI, OpenAI, DeepMind, HuggingFace, Anthropic, 机器之心)
 **Read**: `references/type6_paper_briefing.md`
-**Template**: `templates/paper_briefing.md`
+**Word Script**: `scripts/generate_paper_briefing.py`（接收 JSON，生成 .docx）
 **Special**: Load `config/blog_feeds.json` for RSS URLs
 
-**🛑 Type 6 关键风格规则**:
+**🛑 Type 6 关键规则**:
+> - **输出必须是 Word（.docx）**，不能只输出 .md
+> - 完整流程：收集 → 筛选 → 摘要 → **保存 JSON** → **运行 Word 脚本**
 > - 标题用**原英文标题**，不要翻译成花哨中文标题
-> - 摘要是**忠实翻译**（200-400字），保留技术术语和实验数字，不是"讲故事"
+> - 摘要是**忠实翻译**（200-400字），保留技术术语和实验数字
 > - 每篇必须有：**作者、链接、匹配关键词**
-> - 按**研究方向**（计算架构/大模型优化/多模态AI 等）分组，不按 arXiv 原始分类
+> - 按**研究方向**（计算架构/大模型优化/多模态AI 等）分组
 > - 每组论文数量**不设上限**，有多少收录多少
-> - ❌ 不要写开头寒暄（"各位同仁早上好"）
-> - ❌ 不要写空洞的"趋势洞察"段落
+> - ❌ 不要写开头寒暄 ❌ 不要写空洞的"趋势洞察"
 
 ### Type 7: KOL Weekly Digest (KOL科技领袖周报)
 **Triggers**: "KOL周报", "大佬推文", "科技领袖观点", "最近大佬说了什么", "tech leader tweets"

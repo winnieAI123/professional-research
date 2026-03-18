@@ -148,50 +148,92 @@ For blog posts, keep it simple:
 2. Generate one-line summary (保留技术细节)
 3. Categorize by topic
 
-## Report Structure
+## Report Output — 🛑 MANDATORY
 
-简报严格按以下格式输出：
+**报告必须输出 Word 格式（.docx），不能只输出 Markdown。**
 
-```markdown
-# 学术论文追踪简报 — YYYY年MM月DD日
+### Step 6: Save JSON Data
 
-共 N 篇匹配论文 | M 个研究方向
-数据来源：arXiv RSS 当日新论文（共 X 篇），经关键词预筛选 + LLM 精选
+Agent 必须将筛选+摘要后的论文数据保存为 JSON，格式如下：
 
-────────────────────────────────────────────────────────────
+```python
+import json
 
-## [研究方向名]类（N 篇）
+data = {
+    "date": "2026-03-18",          # 当天日期 YYYY-MM-DD
+    "total_papers": len(all_filtered_papers),  # 匹配论文总数
+    "total_directions": len(used_categories),   # 有论文的研究方向数
+    "total_arxiv": len(all_raw_papers),         # arXiv 原始论文总数
+    "categories": [
+        {
+            "name": "计算架构",     # 研究方向名（不带"类"字）
+            "papers": [
+                {
+                    "title": "English Paper Title",        # 原英文标题
+                    "authors": "Author1, Author2",          # 作者
+                    "link": "https://arxiv.org/abs/xxxx",   # 链接
+                    "keywords": ["Neuromorphic", "PIM"],    # 匹配到的关键词
+                    "summary": "中文摘要（200-400字）...",   # LLM 生成的摘要
+                    "hardware_specs": ["energy efficiency"]  # 硬件规格（可为空 []）
+                }
+            ]
+        }
+    ],
+    "blog_updates": [
+        {
+            "source": "Google AI",
+            "articles": [
+                {"title_zh": "中文标题", "summary": "一句话", "link": "https://..."}
+            ]
+        }
+    ]
+}
 
-### 1. [原英文标题]
-**作者：** [Authors]
-**链接：** https://arxiv.org/abs/[id]
-**匹配关键词：** [keyword1, keyword2]
-
-[200-400字中文摘要，忠实翻译，保留技术细节]
-
-涉及硬件规格：[如有]
-
-────────────────────────────────────────────────────────────
-
-### 2. [原英文标题]
-...
-
-────────────────────────────────────────────────────────────
-
-## AI Lab 博客更新
-
-### [源名称]
-- [中文标题] | [一句话摘要] | [链接]
+# 保存 JSON
+json_path = os.path.join(output_dir, f"学术简报_{date_str.replace('-','')}.json")
+with open(json_path, "w", encoding="utf-8") as f:
+    json.dump(data, f, ensure_ascii=False, indent=2)
 ```
 
-**🛑 格式规则**:
-- 标题用**原英文标题**，不要翻译成中文花哨标题
-- 每篇论文必须包含: 作者、链接、匹配关键词
+### Step 7: Generate Word Report
+
+```bash
+cd "C:/Users/wangtian/.claude/skills/professional-research" && python scripts/generate_paper_briefing.py --input "[JSON文件路径]" --output "[输出目录]/学术简报_YYYYMMDD.docx"
+```
+
+脚本自动生成专业格式的 Word 文档：
+- 标题居中、深蓝色
+- 分类标题带篇数
+- 每篇论文：编号标题 + 作者 + 链接 + 蓝色匹配关键词 + "摘要："标签 + 蓝色硬件规格
+- 真正的 Word 分隔线（不是文本 ────）
+- 博客更新板块
+
+### Step 8 (Optional): Save Markdown Copy
+
+如果用户需要 Markdown 版本，也生成一份 .md 文件。但 **Word 是主要输出**。
+
+## 🛑 Quick Reference — Agent 执行摘要
+
+```
+收到 Type 6 请求 →
+  1. fetch_arxiv_rss()          → ~1800 篇
+  2. fetch_blog_feeds(days=1)   → ~10-30 篇
+  3. 关键词匹配 + LLM 筛选     → ~20-50 篇
+  4. LLM 生成摘要（纯文本）     → 每篇 200-400 字
+  5. 保存 JSON 到输出目录
+  6. 运行 generate_paper_briefing.py → .docx
+  7. 向用户报告：论文数量 / 研究方向 / 文件路径
+```
+
+## Style Rules (摘要风格)
+
+- 标题用**原英文标题**，不要翻译成花哨中文标题
+- 摘要是**忠实翻译**（200-400字），保留技术术语和实验数字
+- 每篇必须有：作者、链接、匹配关键词
 - 按研究方向分组，不按 arXiv 分类分组
 - 每组论文数量不设上限，有多少收录多少
-- 不要写开头寒暄语
-- 不要写空洞的"趋势洞察"段落
-- 分隔线用 ──── (40个)
+- ❌ 不要写开头寒暄（"各位同仁早上好"）
+- ❌ 不要写空洞的"趋势洞察"段落
 
 ## Model Selection
 
@@ -201,9 +243,3 @@ For blog posts, keep it simple:
 | LLM filtering (Step 3b) | gemini-2.0-flash | Fast, cheap, judging relevance is simple |
 | Summaries (Step 4) | gemini-3-pro-preview | Needs accurate technical translation |
 
-## Report Output
-
-```python
-from utils import read_template
-template = read_template("paper_briefing.md")
-```
