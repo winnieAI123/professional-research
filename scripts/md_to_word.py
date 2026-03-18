@@ -432,7 +432,7 @@ def parse_markdown(content):
             while i < len(lines):
                 item_match = re.match(r'^[\-\*\+]\s+(.+)$', lines[i].strip())
                 if item_match:
-                    list_items.append(clean_markdown_syntax(item_match.group(1)))
+                    list_items.append(item_match.group(1))
                     i += 1
                 else:
                     break
@@ -445,7 +445,7 @@ def parse_markdown(content):
             while i < len(lines):
                 item_match = re.match(r'^\d+\.\s+(.+)$', lines[i].strip())
                 if item_match:
-                    list_items.append(clean_markdown_syntax(item_match.group(1)))
+                    list_items.append(item_match.group(1))
                     i += 1
                 else:
                     break
@@ -468,7 +468,7 @@ def parse_markdown(content):
             i += 1
 
         if para_lines:
-            text = clean_markdown_syntax(' '.join(para_lines))
+            text = ' '.join(para_lines)
             if text:
                 elements.append(('paragraph', text))
 
