@@ -26,7 +26,7 @@ from utils import get_api_key, parse_json_response
 # standard chain. Use them explicitly only when deep reasoning is needed.
 MODEL_FALLBACK_CHAIN = [
     "models/gemini-2.5-flash",       # primary: reliable, fast, full output
-    "models/gemini-2.0-flash",       # secondary fallback
+    "models/gemini-3-flash",         # secondary fallback
     "models/gemini-3.1-flash-lite",  # tertiary fallback
 ]
 
