@@ -1,7 +1,12 @@
 {
   "permissions": {
     "allow": [
-      "mcp__tavily-search__tavily-search"
+      "mcp__tavily-search__tavily-search",
+      "Read(//d/clauderesult/**)",
+      "Bash(mkdir -p \"D:/clauderesult/claude0318\")",
+      "Bash(cd \"C:/Users/wangtian/.claude/skills/professional-research\" && python scripts/collect_financial_deep.py --companies \"蚂蚁集团,微众银行,360数科\" --query \"分产品余额情况,收入情况,利润\" --years 5 --output \"D:/clauderesult/claude0318/\" 2>&1)",
+      "Bash(python -c \"\nimport json\nwith open\\('D:/clauderesult/claude0318/data/qfin_extracted.json', encoding='utf-8'\\) as f:\n    data = json.load\\(f\\)\nfor yr, content in data.items\\(\\):\n    print\\(f'\\\\n=== {yr} ==='\\)\n    print\\(content[:800]\\)\n\" 2>&1)",
+      "Bash(cd \"C:/Users/wangtian/.claude/skills/professional-research\" && python scripts/md_to_word.py \"D:/clauderesult/claude0318/fintech_tri_report.md\" --output \"D:/clauderesult/claude0318/蚂蚁微众360_五年财务对比报告.docx\" 2>&1)"
     ]
   }
 }

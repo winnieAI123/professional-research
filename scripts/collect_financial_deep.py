@@ -862,8 +862,111 @@ def collect_pdf_reports(company: dict, query: str, target_years: list, data_dir:
     return result
 
 
+# Known institution → official annual report page mapping
+# For each entry: url = report listing page, link_selector = CSS selector for PDF links
+KNOWN_REPORT_SOURCES = {
+    "微众银行": {
+        "url": "https://www.webank.com/financialReport/list",
+        "base_url": "https://www.webank.com",
+        "link_selector": "div.report-list a, div.list-wrap a, a[href*='.pdf']",
+    },
+    # Add more institutions here as needed:
+    # "网商银行": {"url": "https://...", "base_url": "https://...", "link_selector": "..."},
+}
+
+
+def _fetch_official_reports(company_name: str, target_years: list) -> list:
+    """Try to get PDF links from official website for known institutions."""
+    config = None
+    for name, cfg in KNOWN_REPORT_SOURCES.items():
+        if name in company_name or company_name in name:
+            config = cfg
+            break
+    
+    if not config:
+        return []
+    
+    print(f"    [Official] Fetching from {config['url']}...")
+    
+    try:
+        from bs4 import BeautifulSoup
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'text/html,application/xhtml+xml',
+        }
+        resp = requests.get(config["url"], headers=headers, timeout=15, verify=False)
+        resp.raise_for_status()
+        
+        soup = BeautifulSoup(resp.text, 'html.parser')
+        
+        # Try multiple strategies to find PDF links
+        results = []
+        seen_years = set()
+        min_year = str(min(target_years))
+        max_year = str(max(target_years))
+        
+        # Strategy 1: CSS selector from config
+        links = soup.select(config["link_selector"])
+        
+        # Strategy 2: If no results, try all <a> tags with href containing 'pdf' or 'report'
+        if not links:
+            links = soup.find_all('a', href=True)
+        
+        for a_tag in links:
+            href = a_tag.get('href', '')
+            text = a_tag.get_text(strip=True)
+            
+            # Skip non-PDF and non-report links
+            if not href:
+                continue
+            
+            # Make absolute URL
+            if href.startswith('/'):
+                href = config["base_url"] + href
+            elif not href.startswith('http'):
+                continue
+            
+            # Check if it's a report link (PDF or report page)
+            is_report = any(kw in (href + text).lower() for kw in ['.pdf', '年报', '年度报告', 'annual', 'report'])
+            if not is_report:
+                continue
+            
+            # Extract year
+            year_match = re.search(r'20[12]\d', text + href)
+            year = year_match.group() if year_match else ""
+            
+            if year and year not in seen_years and min_year <= year <= max_year:
+                seen_years.add(year)
+                results.append({
+                    "url": href,
+                    "title": text or f"{company_name} {year}年度报告",
+                    "year": year,
+                    "filename": f"{company_name}_{year}_annual_report.pdf",
+                    "source": "official_website",
+                })
+        
+        if results:
+            print(f"    ✓ Official source: found {len(results)} reports for years {sorted(seen_years, reverse=True)}")
+        else:
+            print(f"    ⚠ Official page loaded but no report links matched target years")
+        
+        return results
+        
+    except Exception as e:
+        print(f"    ⚠ Official source failed: {e}")
+        return []
+
+
 def _search_pdf_reports(company_name: str, target_years: list) -> list:
-    """Search for PDF annual reports via Tavily, filtered by target years."""
+    """Search for PDF annual reports. Priority: official website > Tavily search."""
+    
+    # Priority 1: Official website (reliable, authoritative)
+    official = _fetch_official_reports(company_name, target_years)
+    if official:
+        return official
+    
+    # Priority 2: Tavily search (fallback, less reliable)
+    print(f"    [Tavily] Searching for PDF reports...")
     min_year = str(min(target_years))
     max_year = str(max(target_years))
     try:
@@ -1220,6 +1323,148 @@ def generate_word_report(company_results: dict, query: str, years: int, output_d
     doc.add_paragraph(f'时间范围: 近{years}年')
     doc.add_paragraph(f'生成日期: {datetime.now().strftime("%Y-%m-%d")}')
     doc.add_paragraph(f'公司: {", ".join(company_results.keys())}')
+    
+    # ================================================================
+    # Part 0: Direct Answer Tables — 直接回答用户问题
+    # Parse query into dimensions, then create cross-company tables
+    # ================================================================
+    
+    # Step 1: Parse user query into analysis dimensions
+    all_company_data = {
+        name: json.dumps(r.get("data", {}), ensure_ascii=False, default=str)[:5000]
+        for name, r in company_results.items() if r and r.get("data")
+    }
+    
+    if all_company_data:
+        dimension_prompt = f"""用户问题: "{query}"
+涉及公司: {list(all_company_data.keys())}
+
+各公司可用的指标名:
+{json.dumps({name: list(set(
+    metric_name 
+    for group in (company_results[name] or {}).get("data", {}).values()
+    for metric_name in group.keys() 
+    if isinstance(group.get(metric_name), dict)
+)) for name in all_company_data}, ensure_ascii=False)}
+
+任务: 根据用户问题，拆解为具体的对比维度，每个维度选择各公司中最匹配的指标。
+
+输出严格JSON格式:
+{{
+  "dimensions": [
+    {{
+      "title": "维度名（如：收入对比）",
+      "unit": "单位（如：千元RMB、亿元）",
+      "rows": [
+        {{"label": "公司-指标名", "company": "公司名", "metric_path": ["组名", "指标名"]}}
+      ]
+    }}
+  ]
+}}
+
+规则:
+- 每个维度精选最核心的3-8行，不要堆太多
+- 维度拆分跟随用户问题的关键词（如"收入"=一个维度，"利润"=一个维度，"余额"=一个维度）
+- label 用中文简称，如"微众-营业收入"、"360-信贷驱动服务收入"
+- metric_path 必须精确匹配数据中真实存在的组名和指标名
+- 如果某公司没有该维度的数据，就不放它
+"""
+        
+        dim_result = generate_content(prompt=dimension_prompt, max_output_tokens=3000)
+        
+        if dim_result:
+            try:
+                dim_cleaned = dim_result.strip().strip('```json').strip('```').strip()
+                dim_data = json.loads(dim_cleaned)
+                dimensions = dim_data.get("dimensions", [])
+                
+                if dimensions:
+                    doc.add_heading('问题直答', level=1)
+                    p = doc.add_paragraph(f'以下表格直接回答: "{query}"')
+                    p.runs[0].font.size = Pt(9)
+                    p.runs[0].font.color.rgb = RGBColor(100, 100, 100)
+                    
+                    for dim in dimensions:
+                        dim_title = dim.get("title", "")
+                        dim_unit = dim.get("unit", "")
+                        rows = dim.get("rows", [])
+                        
+                        if not rows:
+                            continue
+                        
+                        # Table title
+                        title_text = f'{dim_title}（{dim_unit}）' if dim_unit else dim_title
+                        p = doc.add_paragraph()
+                        run = p.add_run(title_text)
+                        run.bold = True
+                        run.font.size = Pt(10.5)
+                        run.font.name = 'Arial'
+                        run.element.rPr.rFonts.set(qn('w:eastAsia'), 'SimSun')
+                        
+                        # Collect all years across all rows in this dimension
+                        dim_years = set()
+                        row_values = []
+                        for r_spec in rows:
+                            company_name = r_spec.get("company", "")
+                            metric_path = r_spec.get("metric_path", [])
+                            label = r_spec.get("label", "")
+                            
+                            # Navigate data to find values
+                            result = company_results.get(company_name)
+                            if not result or not result.get("data"):
+                                continue
+                            
+                            data = result["data"]
+                            values = {}
+                            if len(metric_path) == 2:
+                                group = data.get(metric_path[0], {})
+                                metric_data = group.get(metric_path[1], {})
+                                if isinstance(metric_data, dict):
+                                    values = {k: v for k, v in metric_data.items() if re.match(r'^\d{4}$', str(k))}
+                            elif len(metric_path) == 1:
+                                # Try finding in any group
+                                for group in data.values():
+                                    if metric_path[0] in group:
+                                        metric_data = group[metric_path[0]]
+                                        if isinstance(metric_data, dict):
+                                            values = {k: v for k, v in metric_data.items() if re.match(r'^\d{4}$', str(k))}
+                                            break
+                            
+                            if values:
+                                dim_years.update(values.keys())
+                                row_values.append({"label": label, "values": values})
+                        
+                        if not row_values or not dim_years:
+                            continue
+                        
+                        sorted_years = sorted(dim_years)
+                        
+                        # Build Word table
+                        headers = ['指标'] + sorted_years
+                        table = doc.add_table(rows=1, cols=len(headers))
+                        table.style = 'Table Grid'
+                        
+                        for i, h_text in enumerate(headers):
+                            cell = table.rows[0].cells[i]
+                            cell.text = h_text
+                            _set_cell_font(cell, size=Pt(9))
+                            cell.paragraphs[0].runs[0].bold = True
+                        
+                        for rv in row_values:
+                            row = table.add_row()
+                            row.cells[0].text = rv["label"]
+                            _set_cell_font(row.cells[0], size=Pt(9))
+                            for i, y in enumerate(sorted_years, 1):
+                                val = rv["values"].get(y, "-")
+                                row.cells[i].text = _format_number(val) if val != "-" else "-"
+                                _set_cell_font(row.cells[i], size=Pt(9))
+                        
+                        doc.add_paragraph()  # spacing
+                    
+                    doc.add_paragraph('─' * 50)
+                    
+            except (json.JSONDecodeError, KeyError) as e:
+                print(f"  ⚠ Direct answer tables failed: {e}")
     
     # Part 1: Executive Summary — Claude Code style
     # Per-company: core narrative + key tables + bullet points
