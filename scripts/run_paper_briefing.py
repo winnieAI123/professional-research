@@ -310,6 +310,7 @@ def assemble_json(papers: list, blogs: list, total_arxiv: int) -> dict:
             "title": p.get("title", ""),
             "authors": p.get("authors", ""),
             "link": p.get("link", ""),
+            "abstract": p.get("abstract", ""),
             "keywords": p.get("keywords", []),
             "summary": p.get("summary", ""),
             "hardware_specs": [kw for kw in p.get("keywords", [])
