@@ -17,8 +17,11 @@ Takes ~3-5 minutes total. Outputs:
 import argparse
 import json
 import os
+import re
 import sys
 import time
+import urllib.request
+import xml.etree.ElementTree as ET
 from datetime import datetime
 from collections import defaultdict
 
@@ -80,6 +83,77 @@ FOCUS_AREAS = {
         "Chiplet", "chiplet",
     ],
 }
+
+
+# ============================================================
+# Step 0: Fetch Full Abstracts from arXiv API
+# ============================================================
+
+ARXIV_API_URL = "http://export.arxiv.org/api/query"
+
+def _extract_arxiv_id(link: str) -> str:
+    """Extract arXiv ID from URL like https://arxiv.org/abs/2603.15886"""
+    m = re.search(r'(\d{4}\.\d{4,5})', link)
+    return m.group(1) if m else ""
+
+
+def fetch_full_abstracts(papers: list, batch_size: int = 20):
+    """Fetch complete abstracts from arXiv API, replacing truncated RSS ones.
+    
+    arXiv API: http://export.arxiv.org/api/query?id_list=2603.15886,2603.15987,...
+    """
+    # Collect arXiv IDs
+    id_map = {}  # arxiv_id -> paper index
+    for i, p in enumerate(papers):
+        aid = _extract_arxiv_id(p.get("link", ""))
+        if aid:
+            id_map[aid] = i
+    
+    if not id_map:
+        return
+    
+    print(f"\n=== Step 4.5: 获取完整摘要（{len(id_map)} 篇）===")
+    
+    fetched = 0
+    ids_list = list(id_map.keys())
+    
+    for batch_start in range(0, len(ids_list), batch_size):
+        batch_ids = ids_list[batch_start:batch_start + batch_size]
+        id_str = ",".join(batch_ids)
+        url = f"{ARXIV_API_URL}?id_list={id_str}&max_results={len(batch_ids)}"
+        
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "PaperBriefing/1.0"})
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                xml_data = resp.read().decode("utf-8")
+            
+            root = ET.fromstring(xml_data)
+            ns = {"atom": "http://www.w3.org/2005/Atom"}
+            
+            for entry in root.findall("atom:entry", ns):
+                # Extract ID
+                id_elem = entry.find("atom:id", ns)
+                if id_elem is None:
+                    continue
+                aid = _extract_arxiv_id(id_elem.text or "")
+                if aid not in id_map:
+                    continue
+                
+                # Extract full abstract
+                summary_elem = entry.find("atom:summary", ns)
+                if summary_elem is not None and summary_elem.text:
+                    full_abstract = summary_elem.text.strip()
+                    if full_abstract:
+                        idx = id_map[aid]
+                        papers[idx]["abstract"] = full_abstract
+                        fetched += 1
+            
+            time.sleep(1)  # Be polite to arXiv API
+            
+        except Exception as e:
+            print(f"  [API batch error] {e}")
+    
+    print(f"  完整摘要获取: {fetched}/{len(id_map)} 篇已更新")
 
 
 # ============================================================
@@ -175,20 +249,16 @@ def llm_filter_batch(papers: list, batch_size: int = 15) -> list:
 # Step 3: Summary Generation (Pro model)
 # ============================================================
 
-SUMMARY_PROMPT = """请将以下英文论文摘要翻译为中文。
+SUMMARY_PROMPT_PREFIX = """请将以下英文论文摘要翻译为中文。
 
 翻译要求：
 - 忠实翻译原文，不要删减、改写或"总结"
 - 保留所有技术术语，首次出现时括号附上英文原文
 - 保留所有数字、百分比和实验结果
-- 数学公式用纯文本表达（如 "N维环面" 而不是 "$\mathbb{T}^N$"），禁止输出任何 LaTeX 符号
+- 数学公式用纯文本表达，禁止输出任何 LaTeX 符号（如 $ 或 \\）
 - 直接输出翻译正文，不要加"摘要："等前缀
 
-论文标题: {title}
-英文摘要:
-{abstract}
-
-中文翻译："""
+"""
 
 
 def generate_summaries(papers: list) -> list:
@@ -196,9 +266,13 @@ def generate_summaries(papers: list) -> list:
     print(f"\n=== 生成中文摘要（{len(papers)} 篇）===")
 
     for i, paper in enumerate(papers):
-        prompt = SUMMARY_PROMPT.format(
-            title=paper.get("title", ""),
-            abstract=paper.get("abstract", ""),
+        title = paper.get("title", "")
+        abstract = paper.get("abstract", "")
+        prompt = (
+            SUMMARY_PROMPT_PREFIX
+            + f"论文标题: {title}\n"
+            + f"英文摘要:\n{abstract}\n\n"
+            + "中文翻译："
         )
 
         try:
@@ -319,6 +393,9 @@ def run_pipeline(output_dir: str = None):
         filtered.extend(papers[:MAX_PER_AREA])
     print(f"\n=== Step 4: 按关键词命中数排序，每方向最多 {MAX_PER_AREA} 篇 ===")
     print(f"  筛后: {len(filtered)} 篇")
+
+    # Step 4.5: Fetch full abstracts from arXiv API
+    fetch_full_abstracts(filtered)
 
     # Step 5: Generate summaries
     summarized = generate_summaries(filtered)
