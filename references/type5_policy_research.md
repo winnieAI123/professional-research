@@ -115,6 +115,37 @@ For each filtered policy document:
    - 影响评估（受益方、承压方、合规要求、时间节点）
    - 原文URL
 
+### Step 4b: 🛑 原文链接验证与补搜 (MANDATORY)
+
+**禁止在报告中出现"待提供"、"链接待补充"等占位符。**
+
+对每条政策检查是否有有效的原文 URL。如果缺失，执行以下补救流程：
+
+**第一轮：定向补搜**
+```python
+# 用政策全名 + 发布机构域名做精确搜索
+search_query = f'site:{ministry_site} "{policy_full_name}"'
+# 例如：site:sz.gov.cn "打造人工智能OPC创业生态引领地行动计划"
+```
+
+**第二轮：扩大搜索**
+```python
+# 如果第一轮没结果，去掉 site: 限制，用全网搜索
+search_query = f'"{policy_full_name}" {issuing_authority} 原文'
+```
+
+**最终降级处理**：
+如果两轮补搜仍找不到原文链接，按以下规则处理：
+
+| 情况 | 处理方式 |
+|------|---------|
+| 找到了政府官网原文 | 填原文 URL（最佳） |
+| 只找到新闻报道 | 填新闻 URL + 标注 `[新闻来源]` |
+| 什么都找不到 | 填搜索得到的最佳来源 URL + 标注 `[间接来源]` |
+
+> ❌ **绝对禁止**：填写"待提供"、"（链接待补充）"、留空。
+> ✅ 必须至少提供一个可访问的 URL，哪怕是间接来源。
+
 ### Step 5: Supplementary Searches (辅助分析)
 
 **5a. Policy Interpretations (解读)**
