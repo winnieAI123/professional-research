@@ -222,7 +222,7 @@ def generate_paper_briefing_word(data, output_path):
             p_title_line.paragraph_format.space_before = Pt(8)
             p_title_line.paragraph_format.space_after = Pt(4)
             run = p_title_line.add_run(f'{idx + 1}. {paper.get("title", "Untitled")}')
-            _set_run_font(run, size=STYLE['paper_title_size'], bold=True, color=STYLE['color_body'])
+            _set_run_font(run, size=STYLE['paper_title_size'], bold=True, color=STYLE['color_heading'])
             
             # Authors
             authors = paper.get('authors', '')
