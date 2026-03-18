@@ -19,11 +19,22 @@ from utils import get_api_key, parse_json_response
 # ============================================================
 
 # Ordered by preference. On 503, try the next model in chain.
+# NOTE: gemini-3-pro-preview / gemini-2.5-pro are thinking models.
+# They MUST be placed LAST — without explicit thinking_budget=0 they
+# consume most of their token budget on internal reasoning, causing
+# severely truncated output (e.g. "1, 2," instead of "1, 2, 3, 4, 5").
 MODEL_FALLBACK_CHAIN = [
-    "models/gemini-3-pro-preview",
-    "models/gemini-2.5-flash",
-    "models/gemini-2.5-pro",
+    "models/gemini-2.5-flash",      # reliable, fast, no truncation
+    "models/gemini-2.5-pro",        # thinking model — needs thinking_budget=0
+    "models/gemini-3-pro-preview",  # thinking model — needs thinking_budget=0
 ]
+
+# Models that require thinking_budget=0 to avoid output truncation
+THINKING_MODELS = {
+    "models/gemini-2.5-pro",
+    "models/gemini-3-pro-preview",
+    "models/gemini-3.1-pro-preview",
+}
 
 # Lighter model for filtering/classification tasks (cost optimization)
 FAST_MODEL = "models/gemini-2.0-flash"
@@ -96,7 +107,7 @@ def generate_content(
         gen_config["max_output_tokens"] = max_output_tokens
     
     last_error = None
-    
+
     for model_name in models_to_try:
         for attempt in range(max_retries):
             try:
@@ -104,8 +115,15 @@ def generate_content(
                     "model": model_name,
                     "contents": prompt,
                 }
-                if gen_config:
-                    kwargs["config"] = gen_config
+                # Thinking models (gemini-2.5-pro, gemini-3-pro-preview, etc.)
+                # consume most of their token budget on internal reasoning by default,
+                # leaving almost nothing for the actual response → severe truncation.
+                # Fix: disable thinking (thinking_budget=0) unless caller opts in.
+                call_config = dict(gen_config)  # copy so we don't mutate original
+                if model_name in THINKING_MODELS:
+                    call_config.setdefault("thinking_config", {"thinking_budget": 0})
+                if call_config:
+                    kwargs["config"] = call_config
                 
                 response = client.models.generate_content(**kwargs)
                 

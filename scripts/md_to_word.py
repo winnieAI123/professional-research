@@ -59,8 +59,76 @@ def set_font(run, size=None, bold=False, color=None):
     run.element.rPr.rFonts.set(qn('w:eastAsia'), FONT_CONFIG['chinese'])
 
 
+def add_hyperlink(paragraph, text, url, color=None):
+    """Add a real hyperlink to a Word paragraph.
+    
+    python-docx doesn't natively support hyperlinks, so we use OOXML directly.
+    """
+    part = paragraph.part
+    r_id = part.relate_to(url, 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink', is_external=True)
+    
+    hyperlink = parse_xml(f'<w:hyperlink {nsdecls("w")} r:id="{r_id}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"></w:hyperlink>')
+    
+    run_elem = parse_xml(f'<w:r {nsdecls("w")}><w:rPr><w:rStyle w:val="Hyperlink"/></w:rPr><w:t xml:space="preserve">{text}</w:t></w:r>')
+    
+    # Apply font settings
+    rPr = run_elem.find(qn('w:rPr'))
+    rFonts = parse_xml(f'<w:rFonts {nsdecls("w")} w:ascii="{FONT_CONFIG["english"]}" w:eastAsia="{FONT_CONFIG["chinese"]}" w:hAnsi="{FONT_CONFIG["english"]}"/>')
+    sz = parse_xml(f'<w:sz {nsdecls("w")} w:val="{FONT_CONFIG["body_size"] * 2}"/>')
+    link_color = color or RGBColor(0x05, 0x63, 0xC1)
+    color_elem = parse_xml(f'<w:color {nsdecls("w")} w:val="{link_color}"/>')
+    u_elem = parse_xml(f'<w:u {nsdecls("w")} w:val="single"/>')
+    rPr.append(rFonts)
+    rPr.append(sz)
+    rPr.append(color_elem)
+    rPr.append(u_elem)
+    
+    hyperlink.append(run_elem)
+    paragraph._p.append(hyperlink)
+
+
+def add_rich_text(paragraph, text, size=None, default_bold=False, default_color=None):
+    """Add text with inline Markdown formatting (bold, links) to a paragraph.
+    
+    Parses **bold**, [text](url) links, and renders them with proper Word formatting.
+    Falls back to clean_markdown_syntax() for other syntax.
+    """
+    # Pattern to match: **bold**, [text](url), or plain text between them
+    pattern = re.compile(r'(\*\*[^*]+\*\*|\[[^\]]+\]\([^)]+\))')
+    parts = pattern.split(text)
+    
+    for part in parts:
+        if not part:
+            continue
+        
+        # Bold: **text**
+        bold_match = re.match(r'^\*\*(.+)\*\*$', part)
+        if bold_match:
+            inner = bold_match.group(1)
+            # Check if bold text contains a link
+            link_in_bold = re.match(r'^\[([^\]]+)\]\(([^)]+)\)$', inner)
+            if link_in_bold:
+                add_hyperlink(paragraph, link_in_bold.group(1), link_in_bold.group(2))
+            else:
+                run = paragraph.add_run(inner)
+                set_font(run, size=size, bold=True, color=default_color)
+            continue
+        
+        # Link: [text](url)
+        link_match = re.match(r'^\[([^\]]+)\]\(([^)]+)\)$', part)
+        if link_match:
+            add_hyperlink(paragraph, link_match.group(1), link_match.group(2))
+            continue
+        
+        # Plain text — clean remaining markdown syntax
+        cleaned = clean_markdown_syntax(part)
+        if cleaned:
+            run = paragraph.add_run(cleaned)
+            set_font(run, size=size, bold=default_bold, color=default_color)
+
+
 def clean_markdown_syntax(text):
-    """Remove all Markdown syntax symbols from text."""
+    """Remove all Markdown syntax symbols from text (for non-link content)."""
     # Bold: **text** or __text__
     text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)
     text = re.sub(r'__([^_]+)__', r'\1', text)
@@ -69,8 +137,8 @@ def clean_markdown_syntax(text):
     text = re.sub(r'_([^_]+)_', r'\1', text)
     # Code: `text`
     text = re.sub(r'`([^`]+)`', r'\1', text)
-    # Links: [text](url) -> text
-    text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)
+    # Links: [text](url) -> text (url) — preserve URL as text fallback
+    text = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'\1 (\2)', text)
     # Strikethrough: ~~text~~
     text = re.sub(r'~~([^~]+)~~', r'\1', text)
     # HTML line breaks
@@ -448,15 +516,13 @@ def build_document(elements):
             doc.add_paragraph()  # Space after table
 
         elif elem_type == 'paragraph':
-            p = doc.add_paragraph(elem[1])
-            for run in p.runs:
-                set_font(run)
+            p = doc.add_paragraph()
+            add_rich_text(p, elem[1])
 
         elif elem_type == 'ulist':
             for item in elem[1]:
-                p = doc.add_paragraph(item, style='List Bullet')
-                for run in p.runs:
-                    set_font(run)
+                p = doc.add_paragraph(style='List Bullet')
+                add_rich_text(p, item)
 
         elif elem_type == 'olist':
             for item in elem[1]:
