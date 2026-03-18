@@ -153,24 +153,19 @@ def llm_filter_batch(papers: list, batch_size: int = 15) -> list:
 # Step 3: Summary Generation (Pro model)
 # ============================================================
 
-SUMMARY_PROMPT = """你是一位资深AI研究员，负责为技术团队撰写论文追踪简报。
-请为以下论文生成中文摘要。
+SUMMARY_PROMPT = """请将以下英文论文摘要翻译为中文。
 
-写作要求：
-- 忠实翻译 abstract 的核心内容，不要"讲故事"
+翻译要求：
+- 忠实翻译原文，不要删减、改写或"总结"
 - 保留所有技术术语，首次出现时括号附上英文原文
-- 保留关键数字和实验结果
-- 长度: 200-400字
-- 语气: 专业简洁
-- 必须包含: 问题是什么 → 方法是什么 → 效果如何
-- 直接输出摘要正文，不要加任何前缀
+- 保留所有数字、百分比和实验结果
+- 直接输出翻译正文，不要加"摘要："等前缀
 
-论文：
-Title: {title}
-Authors: {authors}
-Abstract: {abstract}
+论文标题: {title}
+英文摘要:
+{abstract}
 
-请直接输出中文摘要正文（200-400字）："""
+中文翻译："""
 
 
 def generate_summaries(papers: list) -> list:
@@ -180,15 +175,14 @@ def generate_summaries(papers: list) -> list:
     for i, paper in enumerate(papers):
         prompt = SUMMARY_PROMPT.format(
             title=paper.get("title", ""),
-            authors=paper.get("authors", ""),
             abstract=paper.get("abstract", ""),
         )
 
         try:
             summary = generate_content(
                 prompt,
-                model="models/gemini-2.5-flash",
-                max_output_tokens=1024,
+                model="models/gemini-3-flash-preview",
+                max_output_tokens=2048,
             )
             paper["summary"] = summary.strip() if summary else ""
         except Exception as e:
