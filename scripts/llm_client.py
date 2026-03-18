@@ -20,10 +20,9 @@ from utils import get_api_key, parse_json_response
 
 # Ordered by preference. On 503, try the next model in chain.
 MODEL_FALLBACK_CHAIN = [
-    "models/gemini-2.5-pro",
-    "models/gemini-3.1-pro-preview",
     "models/gemini-3-pro-preview",
     "models/gemini-2.5-flash",
+    "models/gemini-2.5-pro",
 ]
 
 # Lighter model for filtering/classification tasks (cost optimization)

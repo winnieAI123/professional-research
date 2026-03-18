@@ -1,393 +1,344 @@
+# -*- coding: utf-8 -*-
 """
-Paper Briefing — Phase 1
-Fetches arXiv RSS → keyword filter → Word report.
+Type 6: Academic Paper Briefing — One-Click Pipeline
+
+Collects arXiv papers + AI lab blog posts, filters by research focus areas,
+generates Chinese summaries, and produces a formatted Word report.
 
 Usage:
-    python run_paper_briefing.py [--output output/] [--no-translate]
+    python run_paper_briefing.py --output D:/clauderesult/claude0318/
+    python run_paper_briefing.py  # Uses default output dir
 
-Output:
-    - paper_briefing_YYYYMMDD.docx  (Word report)
-    - paper_briefing_YYYYMMDD.json  (raw data)
+Takes ~3-5 minutes total. Outputs:
+    - 学术简报_YYYYMMDD.json  (structured data)
+    - 学术简报_YYYYMMDD.docx  (formatted Word report)
 """
 
+import argparse
+import json
 import os
 import sys
-import re
-import json
-import argparse
+import time
 from datetime import datetime
+from collections import defaultdict
 
-# Add parent scripts dir to path
+# Add scripts/ to path
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
 
-from collect_rss import fetch_arxiv_rss
-from utils import get_config_path
+from collect_rss import fetch_arxiv_rss, fetch_blog_feeds
+from llm_client import generate_content
+from generate_paper_briefing import generate_paper_briefing_word
 
 
 # ============================================================
-# Config
+# Research Focus Areas & Keywords
 # ============================================================
 
-def load_briefing_config():
-    """Load paper briefing configuration."""
-    config_path = get_config_path("paper_briefing.json")
-    if os.path.exists(config_path):
-        with open(config_path, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    return {
-        "focus_areas": {},
-        "arxiv_categories": {
-            "cs.AR": "计算机体系结构",
-            "cs.AI": "人工智能",
-            "cs.LG": "机器学习",
-        },
-        "hardware_spec_keywords": []
-    }
+FOCUS_AREAS = {
+    "计算架构": [
+        "AI chip", "NPU", "edge AI", "on-device", "Processing-in-Memory", "PIM",
+        "FPGA", "accelerator", "ASIC", "neuromorphic", "dataflow", "hardware",
+        "energy efficiency", "RISC-V", "systolic array",
+    ],
+    "大模型优化": [
+        "KV Cache", "quantization", "pruning", "distillation", "inference optimization",
+        "MoE", "speculative decoding", "model compression", "TinyML", "GGUF",
+        "flash attention", "sparse attention", "long context", "FP4", "INT4",
+        "mixture of experts", "knowledge distillation",
+    ],
+    "多模态AI": [
+        "multimodal", "vision-language", "VLM", "MLLM", "image generation",
+        "video understanding", "audio-language", "text-to-image", "text-to-video",
+        "visual question answering", "image captioning",
+    ],
+    "AI Agent": [
+        "agent", "tool use", "planning", "reasoning", "code generation",
+        "function calling", "ReAct", "chain-of-thought", "multi-agent",
+        "agentic", "autonomous", "self-play",
+    ],
+    "具身智能": [
+        "embodied AI", "robot learning", "VLA", "manipulation",
+        "locomotion", "sim-to-real", "world model", "robotic",
+        "humanoid", "grasping", "navigation",
+    ],
+    "基础模型": [
+        "foundation model", "LLM", "pre-training", "RLHF", "alignment",
+        "scaling law", "transformer", "reinforcement learning from human",
+        "instruction tuning", "safety",
+    ],
+}
 
 
 # ============================================================
-# Keyword Filtering
+# Step 1: Keyword Matching
 # ============================================================
 
-def keyword_filter(papers, focus_areas):
-    """
-    Filter papers by keyword matching against title + abstract.
-    Returns papers with added 'matched_area' and 'matched_keywords' fields.
-    """
-    filtered = []
-
+def match_keywords(papers: list) -> list:
+    """Match papers to focus areas by keyword. Returns papers with area + keywords."""
+    matched = []
     for paper in papers:
-        searchable = f"{paper['title']} {paper['abstract']}".lower()
-        matched = []
+        text = (paper.get("title", "") + " " + paper.get("abstract", "")).lower()
+        best_area = None
+        best_keywords = []
+        best_count = 0
 
-        for area, keywords in focus_areas.items():
-            for kw in keywords:
-                if kw.lower() in searchable:
-                    matched.append((area, kw))
+        for area, keywords in FOCUS_AREAS.items():
+            hits = [kw for kw in keywords if kw.lower() in text]
+            if len(hits) > best_count:
+                best_count = len(hits)
+                best_area = area
+                best_keywords = hits
 
-        if matched:
-            paper['matched_area'] = matched[0][0]
-            paper['matched_keywords'] = list(set(kw for _, kw in matched))
-            filtered.append(paper)
+        if best_area:
+            paper["area"] = best_area
+            paper["keywords"] = best_keywords
+            matched.append(paper)
 
+    return matched
+
+
+# ============================================================
+# Step 2: LLM Filtering (Fast model)
+# ============================================================
+
+FILTER_CRITERIA = """判断这篇论文是否具有较高的技术研究价值，符合以下任一条件即保留：
+1. 提出了新的模型架构、训练方法或优化技术
+2. 在重要基准上取得了显著性能提升
+3. 解决了LLM/多模态/具身智能/计算效率领域的实际问题
+4. 具有工程实践意义（部署优化、硬件加速等）
+排除：仅综述/调研性质的论文，或纯数学理论无实验验证的论文。"""
+
+
+def llm_filter_batch(papers: list, batch_size: int = 15) -> list:
+    """Use flash model to filter papers by research value."""
+    if not papers:
+        return []
+
+    filtered = []
+    total_batches = (len(papers) + batch_size - 1) // batch_size
+    print(f"\n=== LLM 精筛（{len(papers)} 篇，{total_batches} 批）===")
+
+    for i in range(0, len(papers), batch_size):
+        batch = papers[i:i + batch_size]
+        batch_num = i // batch_size + 1
+
+        items_text = "\n".join([
+            f"{j+1}. Title: {p['title']}\nAbstract: {p['abstract'][:300]}"
+            for j, p in enumerate(batch)
+        ])
+
+        prompt = f"""请判断以下论文的研究价值。
+
+{FILTER_CRITERIA}
+
+论文列表：
+{items_text}
+
+请只输出保留的论文编号（1-based），用JSON数组格式，例如 [1, 3, 5]。
+只输出JSON数组，不要其他内容。"""
+
+        try:
+            result = generate_content(prompt, use_fast_model=True, return_json=True)
+            if isinstance(result, list):
+                for idx in result:
+                    if isinstance(idx, int) and 1 <= idx <= len(batch):
+                        filtered.append(batch[idx - 1])
+                    elif isinstance(idx, dict) and "index" in idx:
+                        real_idx = idx["index"]
+                        if isinstance(real_idx, int) and 1 <= real_idx <= len(batch):
+                            filtered.append(batch[real_idx - 1])
+        except Exception as e:
+            print(f"  [Batch {batch_num} error] {e} — keeping all")
+            filtered.extend(batch)
+
+        if batch_num % 5 == 0 or batch_num == total_batches:
+            print(f"  Progress: {batch_num}/{total_batches}, kept {len(filtered)}")
+
+    print(f"  精筛结果: {len(filtered)} / {len(papers)}")
     return filtered
 
 
 # ============================================================
-# Hardware Specs Extraction (from abstract, optional)
+# Step 3: Summary Generation (Pro model)
 # ============================================================
 
-def extract_hardware_specs(abstract, hw_keywords):
-    """Check if abstract mentions hardware specs."""
-    if not hw_keywords:
-        return []
-    text_lower = abstract.lower()
-    return [kw for kw in hw_keywords if kw.lower() in text_lower]
+SUMMARY_PROMPT = """你是一位资深AI研究员，负责为技术团队撰写论文追踪简报。
+请为以下论文生成中文摘要。
+
+写作要求：
+- 忠实翻译 abstract 的核心内容，不要"讲故事"
+- 保留所有技术术语，首次出现时括号附上英文原文
+- 保留关键数字和实验结果
+- 长度: 200-400字
+- 语气: 专业简洁
+- 必须包含: 问题是什么 → 方法是什么 → 效果如何
+- 直接输出摘要正文，不要加任何前缀
+
+论文：
+Title: {title}
+Authors: {authors}
+Abstract: {abstract}
+
+请直接输出中文摘要正文（200-400字）："""
 
 
-# ============================================================
-# Clean abstract (remove HTML tags + arXiv prefix from RSS)
-# ============================================================
+def generate_summaries(papers: list) -> list:
+    """Generate Chinese summaries for each paper."""
+    print(f"\n=== 生成中文摘要（{len(papers)} 篇）===")
 
-def clean_abstract(raw):
-    """Remove HTML tags, arXiv prefix, and clean whitespace."""
-    import html as html_lib
-    text = re.sub(r'<[^>]+>', '', raw)
-    text = html_lib.unescape(text)
-    text = re.sub(r'\s+', ' ', text).strip()
-    # Remove arXiv announcement header: "arXiv:XXXX.XXXXvN Announce Type: xxx Abstract: "
-    text = re.sub(r'^arXiv:\d+\.\d+v\d+\s+Announce Type:\s*\S+\s+Abstract:\s*', '', text)
-    # Remove plain "Abstract: " prefix
-    if text.lower().startswith('abstract:'):
-        text = text[9:].strip()
-    return text
-
-
-# ============================================================
-# Batch Translate Abstracts via Gemini
-# ============================================================
-
-def translate_abstracts(papers, batch_size=5):
-    """
-    Translate paper abstracts from English to Chinese using Gemini Flash.
-    Processes in batches for efficiency.
-    Returns papers with added 'abstract_zh' field.
-    """
-    try:
-        from llm_client import generate_content
-    except ImportError:
-        print("  [Warning] llm_client not available, skipping translation")
-        return papers
-
-    total = len(papers)
-    translated = 0
-
-    for i in range(0, total, batch_size):
-        batch = papers[i:i+batch_size]
-        # Build batch prompt
-        abstracts_text = ""
-        for j, paper in enumerate(batch):
-            abstract = clean_abstract(paper.get('abstract', ''))
-            abstracts_text += f"[{j+1}]\n{abstract}\n\n"
-
-        prompt = f"""请将以下{len(batch)}篇学术论文的英文摘要准确翻译为中文。
-
-翻译要求：
-- 保持学术准确性，专业术语翻译准确
-- 保留原文的专有名词首次出现时的英文（如 KV Cache、Processing-in-Memory 等）
-- 语言风格与原文保持一致，不需要通俗化
-- 每篇翻译之间用 [N] 标记分隔（N 为编号）
-
-待翻译的摘要：
-
-{abstracts_text}
-
-请按 [1] [2] ... 的格式输出翻译结果，不要添加额外说明。"""
+    for i, paper in enumerate(papers):
+        prompt = SUMMARY_PROMPT.format(
+            title=paper.get("title", ""),
+            authors=paper.get("authors", ""),
+            abstract=paper.get("abstract", ""),
+        )
 
         try:
-            result = generate_content(prompt, use_fast_model=True, temperature=0.1)
-            # Parse translations by [N] markers
-            parts = re.split(r'\[(\d+)\]', result)
-            translations = {}
-            for k in range(1, len(parts), 2):
-                idx = int(parts[k])
-                text = parts[k+1].strip() if k+1 < len(parts) else ''
-                translations[idx] = text
-
-            for j, paper in enumerate(batch):
-                paper['abstract_zh'] = translations.get(j+1, '')
-                if paper['abstract_zh']:
-                    translated += 1
-
-            print(f"  [翻译] 批次 {i//batch_size+1}: {len(translations)}/{len(batch)} 篇完成")
+            summary = generate_content(
+                prompt,
+                model="models/gemini-3-pro-preview",
+                max_output_tokens=1024,
+            )
+            paper["summary"] = summary.strip() if summary else ""
         except Exception as e:
-            print(f"  [翻译错误] 批次 {i//batch_size+1}: {e}")
-            for paper in batch:
-                paper['abstract_zh'] = ''
+            print(f"  [Paper {i+1}] Summary failed: {e}")
+            paper["summary"] = f"[摘要生成失败] {paper.get('abstract', '')[:300]}"
 
-    print(f"  [翻译完成] {translated}/{total} 篇成功翻译")
+        if (i + 1) % 10 == 0 or (i + 1) == len(papers):
+            print(f"  Progress: {i+1}/{len(papers)}")
+
+    good = sum(1 for p in papers if len(p.get("summary", "")) > 100)
+    print(f"  摘要质量: {good}/{len(papers)} 篇 > 100字")
     return papers
 
 
 # ============================================================
-# Word Report Generation
+# Step 4: Assemble JSON
 # ============================================================
 
-# Fixed area display order
-AREA_ORDER = ['计算架构', '大模型优化', '系统与互联']
-AREA_TITLES = {
-    '计算架构': '计算架构类',
-    '大模型优化': '大模型优化类',
-    '系统与互联': '系统/互联类',
-}
+def assemble_json(papers: list, blogs: list, total_arxiv: int) -> dict:
+    """Assemble the final JSON structure for Word generation."""
+    by_area = defaultdict(list)
+    hw_words = ["bandwidth", "latency", "flops", "energy", "throughput",
+                "dram", "gpu", "tpu", "fpga", "sram", "npu"]
 
-def generate_word_report(papers_by_area, output_path, config):
-    """Generate a Word document briefing with Chinese labels."""
-    from docx import Document
-    from docx.shared import Pt, RGBColor
-    from docx.enum.text import WD_ALIGN_PARAGRAPH
-    from docx.oxml.ns import qn
+    for p in papers:
+        area = p.get("area", "基础模型")
+        by_area[area].append({
+            "title": p.get("title", ""),
+            "authors": p.get("authors", ""),
+            "link": p.get("link", ""),
+            "keywords": p.get("keywords", []),
+            "summary": p.get("summary", ""),
+            "hardware_specs": [kw for kw in p.get("keywords", [])
+                              if any(hw in kw.lower() for hw in hw_words)],
+        })
 
-    doc = Document()
+    area_order = ["计算架构", "大模型优化", "AI Agent", "多模态AI", "具身智能", "基础模型"]
+    categories = []
+    for area in area_order:
+        if area in by_area:
+            categories.append({"name": area, "papers": by_area[area]})
+    for area in by_area:
+        if area not in area_order:
+            categories.append({"name": area, "papers": by_area[area]})
 
-    # --- Helper: set font ---
-    def _font(run, name_en='Arial', name_zh='SimSun', size=10.5, bold=False, color=None):
-        run.font.name = name_en
-        run.element.rPr.rFonts.set(qn('w:eastAsia'), name_zh)
-        run.font.size = Pt(size)
-        run.font.bold = bold
-        if color:
-            run.font.color.rgb = RGBColor(*color)
+    blog_by_source = defaultdict(list)
+    for b in blogs:
+        blog_by_source[b.get("source", "其他")].append({
+            "title_zh": b.get("title", ""),
+            "summary": b.get("abstract", "")[:200],
+            "link": b.get("link", ""),
+        })
 
-    # --- Title ---
-    today = datetime.now().strftime('%Y年%m月%d日')
-    title = doc.add_heading(f'学术论文追踪简报 — {today}', level=0)
-    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    for run in title.runs:
-        _font(run, size=18, bold=True)
-
-    # Summary stats
-    total = sum(len(ps) for ps in papers_by_area.values())
-    stats = doc.add_paragraph()
-    stats.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    r = stats.add_run(f'共 {total} 篇匹配论文 | {len(papers_by_area)} 个研究方向')
-    _font(r, size=10, color=(128, 128, 128))
-
-    # --- Body: by focus area (fixed order) ---
-    for area_key in AREA_ORDER:
-        papers = papers_by_area.get(area_key, [])
-        if not papers:
-            continue
-
-        area_title = AREA_TITLES.get(area_key, area_key)
-        h = doc.add_heading(f'{area_title}（{len(papers)} 篇）', level=1)
-        for run in h.runs:
-            _font(run, size=14, bold=True)
-
-        for i, paper in enumerate(papers, 1):
-            # --- Title (English) ---
-            p = doc.add_paragraph()
-            r = p.add_run(f'{i}. {paper["title"]}')
-            _font(r, size=11, bold=True)
-
-            # --- 作者 (English names, Chinese label) ---
-            if paper.get('authors'):
-                p = doc.add_paragraph()
-                r = p.add_run('作者：')
-                _font(r, name_zh='SimSun', size=10, bold=True)
-                r2 = p.add_run(paper['authors'])
-                _font(r2, size=10, color=(80, 80, 80))
-
-            # --- 链接 ---
-            p = doc.add_paragraph()
-            r = p.add_run('链接：')
-            _font(r, name_zh='SimSun', size=10, bold=True)
-            r2 = p.add_run(paper['link'])
-            _font(r2, size=9, color=(0, 102, 204))
-
-            # --- 匹配关键词 ---
-            if paper.get('matched_keywords'):
-                p = doc.add_paragraph()
-                r = p.add_run('匹配关键词：')
-                _font(r, name_zh='SimSun', size=9, bold=True, color=(160, 80, 0))
-                r2 = p.add_run(', '.join(paper['matched_keywords']))
-                _font(r2, size=9, color=(160, 80, 0))
-
-            # --- 摘要 (Chinese translation, fallback to English) ---
-            abstract_zh = paper.get('abstract_zh', '')
-            abstract_en = clean_abstract(paper.get('abstract', ''))
-            if abstract_zh:
-                p = doc.add_paragraph()
-                r = p.add_run('摘要：')
-                _font(r, name_zh='SimSun', size=10, bold=True)
-                r2 = p.add_run(abstract_zh)
-                _font(r2, name_zh='SimSun', size=10)
-            elif abstract_en:
-                p = doc.add_paragraph()
-                r = p.add_run('摘要（原文）：')
-                _font(r, name_zh='SimSun', size=10, bold=True)
-                r2 = p.add_run(abstract_en)
-                _font(r2, size=10)
-
-            # --- 硬件规格 (optional) ---
-            hw_specs = paper.get('hardware_specs', [])
-            if hw_specs:
-                p = doc.add_paragraph()
-                r = p.add_run('涉及硬件规格：')
-                _font(r, name_zh='SimSun', size=9, bold=True, color=(0, 128, 0))
-                r2 = p.add_run(', '.join(hw_specs))
-                _font(r2, size=9, color=(0, 128, 0))
-
-            # Separator
-            if i < len(papers):
-                sep = doc.add_paragraph()
-                r = sep.add_run('─' * 60)
-                _font(r, size=8, color=(200, 200, 200))
-
-    doc.save(output_path)
-    print(f"  [报告] 已保存: {output_path}")
+    return {
+        "date": datetime.now().strftime("%Y-%m-%d"),
+        "total_papers": len(papers),
+        "total_directions": len(categories),
+        "total_arxiv": total_arxiv,
+        "categories": categories,
+        "blog_updates": [{"source": s, "articles": a}
+                         for s, a in blog_by_source.items()],
+    }
 
 
 # ============================================================
 # Main Pipeline
 # ============================================================
 
+def run_pipeline(output_dir: str = None):
+    """Run the full paper briefing pipeline."""
+    start = time.time()
+    today = datetime.now().strftime("%Y%m%d")
+
+    if output_dir is None:
+        output_dir = os.path.join("D:/clauderesult", f"claude{today[4:]}")
+    os.makedirs(output_dir, exist_ok=True)
+
+    print("=" * 60)
+    print(f"  学术论文追踪简报 — {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    print("=" * 60)
+
+    # Step 1: Collect arXiv
+    print("\n=== Step 1: 收集 arXiv ===")
+    arxiv_papers = fetch_arxiv_rss()
+    total_arxiv = len(arxiv_papers)
+    print(f"  共 {total_arxiv} 篇")
+
+    # Step 2: Collect blogs
+    print("\n=== Step 2: 收集博客 ===")
+    blogs = fetch_blog_feeds(days=1)
+    print(f"  共 {len(blogs)} 篇")
+
+    # Step 3: Keyword matching
+    print("\n=== Step 3: 关键词预筛选 ===")
+    matched = match_keywords(arxiv_papers)
+    print(f"  命中: {len(matched)} / {total_arxiv}")
+    area_counts = defaultdict(int)
+    for p in matched:
+        area_counts[p["area"]] += 1
+    for area, cnt in sorted(area_counts.items(), key=lambda x: -x[1]):
+        print(f"    {area}: {cnt}")
+
+    # Step 4: LLM filtering
+    filtered = llm_filter_batch(matched)
+
+    # Step 5: Generate summaries
+    summarized = generate_summaries(filtered)
+
+    # Step 6: Assemble + save JSON
+    print("\n=== Step 6: 保存数据 ===")
+    data = assemble_json(summarized, blogs, total_arxiv)
+    json_path = os.path.join(output_dir, f"学术简报_{today}.json")
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    print(f"  JSON: {json_path}")
+
+    # Step 7: Word report
+    print("\n=== Step 7: 生成 Word ===")
+    docx_path = os.path.join(output_dir, f"学术简报_{today}.docx")
+    generate_paper_briefing_word(data, docx_path)
+
+    elapsed = time.time() - start
+    print(f"\n{'=' * 60}")
+    print(f"  ✅ 完成！耗时 {elapsed:.0f} 秒")
+    print(f"  论文: {data['total_papers']} 篇 | 方向: {data['total_directions']} 个")
+    for cat in data["categories"]:
+        print(f"    {cat['name']}: {len(cat['papers'])} 篇")
+    print(f"  Word: {docx_path}")
+    print(f"  JSON: {json_path}")
+    print(f"{'=' * 60}")
+
+    return docx_path, json_path
+
+
 def main():
-    parser = argparse.ArgumentParser(description='Paper Briefing — arXiv keyword tracker')
-    parser.add_argument('--output', default=None, help='Output directory')
-    parser.add_argument('--no-translate', action='store_true', help='Skip Gemini translation')
+    parser = argparse.ArgumentParser(description="学术论文追踪简报 — 一键生成")
+    parser.add_argument("--output", "-o", help="输出目录")
     args = parser.parse_args()
-
-    # Output dir
-    today_str = datetime.now().strftime('%m%d')
-    if args.output:
-        out_dir = args.output
-    else:
-        out_dir = os.path.join(f'D:\\clauderesult\\claude{today_str}', 'paper_briefing')
-    os.makedirs(out_dir, exist_ok=True)
-
-    # Load config
-    config = load_briefing_config()
-    focus_areas = config.get('focus_areas', {})
-    categories = config.get('arxiv_categories', {})
-    hw_keywords = config.get('hardware_spec_keywords', [])
-
-    print("=" * 60)
-    print("Step 1: 获取 arXiv RSS 论文")
-    print("=" * 60)
-    all_papers = fetch_arxiv_rss(categories=categories)
-
-    print(f"\n{'=' * 60}")
-    print("Step 2: 关键词过滤")
-    print("=" * 60)
-    print(f"  研究方向: {list(focus_areas.keys())}")
-    all_keywords = [kw for kws in focus_areas.values() for kw in kws]
-    print(f"  关键词数: {len(all_keywords)}")
-
-    filtered = keyword_filter(all_papers, focus_areas)
-    print(f"  匹配论文: {len(filtered)} / {len(all_papers)}")
-
-    # Extract hardware specs
-    for paper in filtered:
-        paper['hardware_specs'] = extract_hardware_specs(
-            paper.get('abstract', ''), hw_keywords
-        )
-
-    # Group by matched area
-    papers_by_area = {}
-    for paper in filtered:
-        area = paper['matched_area']
-        papers_by_area.setdefault(area, []).append(paper)
-
-    for area, ps in papers_by_area.items():
-        print(f"  [{area}] {len(ps)} 篇")
-
-    # Step 3: Translate abstracts
-    if not args.no_translate and filtered:
-        print(f"\n{'=' * 60}")
-        print("Step 3: 翻译摘要 (Gemini Flash)")
-        print("=" * 60)
-        translate_abstracts(filtered, batch_size=5)
-
-    # Step 4: Generate reports
-    print(f"\n{'=' * 60}")
-    print("Step 4: 生成报告")
-    print("=" * 60)
-
-    date_str = datetime.now().strftime('%Y%m%d')
-
-    # Save JSON
-    json_path = os.path.join(out_dir, f'paper_briefing_{date_str}.json')
-    json_data = []
-    for paper in filtered:
-        json_data.append({
-            'title': paper['title'],
-            'authors': paper.get('authors', ''),
-            'abstract_en': clean_abstract(paper.get('abstract', '')),
-            'abstract_zh': paper.get('abstract_zh', ''),
-            'link': paper['link'],
-            'arxiv_id': paper.get('arxiv_id', ''),
-            'category': paper.get('category', ''),
-            'matched_area': paper.get('matched_area', ''),
-            'matched_keywords': paper.get('matched_keywords', []),
-            'hardware_specs': paper.get('hardware_specs', []),
-        })
-    with open(json_path, 'w', encoding='utf-8') as f:
-        json.dump(json_data, f, ensure_ascii=False, indent=2)
-    print(f"  [JSON] 已保存: {json_path}")
-
-    # Generate Word
-    if filtered:
-        docx_path = os.path.join(out_dir, f'paper_briefing_{date_str}.docx')
-        generate_word_report(papers_by_area, docx_path, config)
-    else:
-        print("  今日无匹配论文，未生成报告。")
-
-    print(f"\n{'=' * 60}")
-    print(f"完成 — {len(filtered)} 篇论文，{len(papers_by_area)} 个方向")
-    print("=" * 60)
+    run_pipeline(args.output)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
