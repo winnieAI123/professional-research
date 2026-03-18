@@ -27,9 +27,8 @@ from llm_client import generate_content, get_client, FAST_MODEL
 
 # Fast model fallback chain (for table filtering / classification)
 FAST_MODEL_CHAIN = [
-    "models/gemini-2.0-flash",
+    "models/gemini-3-flash-preview",
     "models/gemini-2.5-flash",
-    "models/gemini-2.0-flash-lite",
 ]
 from utils import get_api_key
 
@@ -1204,55 +1203,50 @@ def generate_word_report(company_results: dict, query: str, years: int, output_d
     doc.add_paragraph(f'生成日期: {datetime.now().strftime("%Y-%m-%d")}')
     doc.add_paragraph(f'公司: {", ".join(company_results.keys())}')
     
-    # Part 1: LLM Analysis (structured by user query dimensions)
-    doc.add_heading('一、核心发现与分析', level=1)
+    # Part 1: Brief per-company summary (data accuracy is the value, not analysis)
+    doc.add_heading('一、概要', level=1)
     
-    all_data_for_analysis = json.dumps(
-        {k: v.get("data", {}) for k, v in company_results.items() if v},
-        ensure_ascii=False, indent=2, default=str
-    )[:30000]
-    
-    analysis_prompt = f"""你是资深金融分析师。根据以下数据写分析报告。
-
-用户的问题是: {query}
-涵盖公司: {", ".join(company_results.keys())}
-
-按照用户问题的维度来组织分析。例如用户问"分产品余额情况，收入情况和利润"，则分三部分写:
-1. 分产品余额情况 - 每家公司的余额规模、变化趋势、CAGR
-2. 收入情况 - 每家公司的收入规模、增速、结构变化
-3. 利润变化 - 每家公司的利润水平、利润率变化
-
-规则:
-- 每个维度写一个小标题（用"一、""二、"开头），然后分公司说明
-- 开门见山，只描述事实和数字，不写建议/启示
-- 不要用Markdown格式（不要用**加粗、不要用#标题、不要用列表符号）
-- 用纯文本写，每个小标题单独一行，正文分段写
-- 数字加千分符（如"5,764,513千元"）
-- 不要编造数据中没有的内容
-
-数据:
-{all_data_for_analysis}"""
-
-    analysis = generate_content(prompt=analysis_prompt, max_output_tokens=6000)
-    if analysis:
-        # Clean up any residual markdown
-        analysis = analysis.replace('**', '').replace('##', '').replace('# ', '')
-        for line in analysis.split('\n'):
-            line = line.strip()
-            if not line:
-                continue
-            # Detect section headers (e.g. "一、分产品余额情况")
-            if re.match(r'^[一二三四五六七八九十]+、', line):
-                h = doc.add_heading(line, level=2)
-                for run in h.runs:
-                    run.font.name = 'Arial'
-                    run.element.rPr.rFonts.set(qn('w:eastAsia'), 'SimSun')
-            else:
-                p = doc.add_paragraph(line)
-                for run in p.runs:
-                    run.font.size = Pt(10.5)
-                    run.font.name = 'Arial'
-                    run.element.rPr.rFonts.set(qn('w:eastAsia'), 'SimSun')
+    for company_name, result in company_results.items():
+        if not result or not result.get("data"):
+            doc.add_heading(company_name, level=2)
+            doc.add_paragraph('未获取到有效数据。')
+            continue
+        
+        # Count data points and year range
+        all_years = set()
+        total_metrics = 0
+        for group in result["data"].values():
+            for metric_data in group.values():
+                if isinstance(metric_data, dict):
+                    year_keys = [k for k in metric_data.keys() if re.match(r'^\d{4}$', str(k))]
+                    all_years.update(year_keys)
+                    total_metrics += len(year_keys)
+        
+        year_range = f"{min(all_years)}-{max(all_years)}" if all_years else "N/A"
+        source = result.get("metadata", {}).get("source", "unknown")
+        
+        doc.add_heading(company_name, level=2)
+        
+        # Generate a brief (max 200 chars) per-company answer to user's query
+        company_data_json = json.dumps(result.get("data", {}), ensure_ascii=False, indent=2, default=str)[:8000]
+        summary_prompt = (
+            f"用一段话（不超过200字）概括{company_name}在{query}方面的核心数据特征。"
+            f"只陈述事实和数字，不加分析评论。不用Markdown格式。\n\n"
+            f"数据:\n{company_data_json}"
+        )
+        summary = generate_content(prompt=summary_prompt, max_output_tokens=500)
+        if summary:
+            summary = summary.replace('**', '').strip()
+            p = doc.add_paragraph(summary)
+            for run in p.runs:
+                run.font.size = Pt(10.5)
+                run.font.name = 'Arial'
+                run.element.rPr.rFonts.set(qn('w:eastAsia'), 'SimSun')
+        
+        # Data source tag
+        p = doc.add_paragraph(f'数据来源: {source} | 覆盖: {year_range} | 数据点: {total_metrics}')
+        p.runs[0].font.size = Pt(9)
+        p.runs[0].font.color.rgb = RGBColor(128, 128, 128)
     
     # Part 2: Data Appendix Tables (Annual)
     doc.add_heading('二、详细年度数据附录', level=1)
