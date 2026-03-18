@@ -37,35 +37,25 @@ from generate_paper_briefing import generate_paper_briefing_word
 
 FOCUS_AREAS = {
     "计算架构": [
-        "AI chip", "NPU", "edge AI", "on-device", "Processing-in-Memory", "PIM",
-        "FPGA", "accelerator", "ASIC", "neuromorphic", "dataflow", "hardware",
-        "energy efficiency", "RISC-V", "systolic array",
+        "Processing-in-Memory", "PIM", "Near-Memory Computing", "Near-Memory",
+        "3D-NAND", "3D NAND", "3D-SRAM", "3D SRAM",
+        "Neuromorphic", "neuromorphic computing",
+        "Processing-Near-Memory", "Processing-Using-Memory",
     ],
     "大模型优化": [
-        "KV Cache", "quantization", "pruning", "distillation", "inference optimization",
-        "MoE", "speculative decoding", "model compression", "TinyML", "GGUF",
-        "flash attention", "sparse attention", "long context", "FP4", "INT4",
-        "mixture of experts", "knowledge distillation",
+        "LLM Quantization", "quantization", "Model Compression", "model compression",
+        "KV Cache", "KV-Cache", "key-value cache",
+        "MoE", "Mixture of Experts", "mixture-of-experts",
+        "Self-Evolution", "self-evolution",
+        "Continual Learning", "continual learning",
+        "Multimodal Large Language Model", "MLLM",
     ],
-    "多模态AI": [
-        "multimodal", "vision-language", "VLM", "MLLM", "image generation",
-        "video understanding", "audio-language", "text-to-image", "text-to-video",
-        "visual question answering", "image captioning",
-    ],
-    "AI Agent": [
-        "agent", "tool use", "planning", "reasoning", "code generation",
-        "function calling", "ReAct", "chain-of-thought", "multi-agent",
-        "agentic", "autonomous", "self-play",
-    ],
-    "具身智能": [
-        "embodied AI", "robot learning", "VLA", "manipulation",
-        "locomotion", "sim-to-real", "world model", "robotic",
-        "humanoid", "grasping", "navigation",
-    ],
-    "基础模型": [
-        "foundation model", "LLM", "pre-training", "RLHF", "alignment",
-        "scaling law", "transformer", "reinforcement learning from human",
-        "instruction tuning", "safety",
+    "系统/互联": [
+        "CXL", "Compute Express Link",
+        "HBM", "High Bandwidth Memory",
+        "HBF",
+        "Optical Interconnect", "optical interconnect", "photonic interconnect",
+        "Chiplet", "chiplet",
     ],
 }
 
@@ -197,7 +187,7 @@ def generate_summaries(papers: list) -> list:
         try:
             summary = generate_content(
                 prompt,
-                model="models/gemini-3-pro-preview",
+                model="models/gemini-2.5-flash",
                 max_output_tokens=1024,
             )
             paper["summary"] = summary.strip() if summary else ""
@@ -235,7 +225,7 @@ def assemble_json(papers: list, blogs: list, total_arxiv: int) -> dict:
                               if any(hw in kw.lower() for hw in hw_words)],
         })
 
-    area_order = ["计算架构", "大模型优化", "AI Agent", "多模态AI", "具身智能", "基础模型"]
+    area_order = ["计算架构", "大模型优化", "系统/互联"]
     categories = []
     for area in area_order:
         if area in by_area:
@@ -301,8 +291,17 @@ def run_pipeline(output_dir: str = None):
     for area, cnt in sorted(area_counts.items(), key=lambda x: -x[1]):
         print(f"    {area}: {cnt}")
 
-    # Step 4: LLM filtering
-    filtered = llm_filter_batch(matched)
+    # Step 4: Cap per area (top MAX_PER_AREA by keyword match count)
+    MAX_PER_AREA = 20
+    by_area = defaultdict(list)
+    for p in matched:
+        by_area[p["area"]].append(p)
+    filtered = []
+    for area, papers in by_area.items():
+        papers.sort(key=lambda x: len(x.get("keywords", [])), reverse=True)
+        filtered.extend(papers[:MAX_PER_AREA])
+    print(f"\n=== Step 4: 按关键词命中数排序，每方向最多 {MAX_PER_AREA} 篇 ===")
+    print(f"  筛后: {len(filtered)} 篇")
 
     # Step 5: Generate summaries
     summarized = generate_summaries(filtered)
