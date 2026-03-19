@@ -2246,14 +2246,36 @@ def run_pipeline(companies: list, query: str, years: int = 5, output_dir: str = 
         json.dump(company_results, f, ensure_ascii=False, indent=2, default=str)
     print(f"\n  [JSON] {json_path}")
     
-    # Generate Word report
+    # Generate raw data Word report (tables only)
     try:
         word_path = generate_word_report(company_results, query, years, output_dir)
-        print(f"  [Word] {word_path}")
+        print(f"  [Word/Raw] {word_path}")
     except Exception as e:
-        print(f"  [Word] Failed: {e}")
+        print(f"  [Word/Raw] Failed: {e}")
         word_path = None
-    
+
+    # Generate analysis report (LLM narrative + tables) via generate_analysis_report.py
+    try:
+        import subprocess as _sp
+        _script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "generate_analysis_report.py")
+        _result = _sp.run(
+            [sys.executable, _script,
+             "--data", json_path,
+             "--output", output_dir,
+             "--query", query,
+             "--years", str(years),
+             "--name", f"analysis_report_{datetime.now().strftime('%Y%m%d')}"],
+            capture_output=True, text=True, timeout=600
+        )
+        if _result.returncode == 0:
+            # Extract output path from script stdout
+            _out_lines = [l for l in _result.stdout.splitlines() if "Saved:" in l or "DONE:" in l]
+            print(f"  [Word/Analysis] Generated" + (f": {_out_lines[-1].split('DONE:')[-1].strip()}" if _out_lines else ""))
+        else:
+            print(f"  [Word/Analysis] Failed (exit {_result.returncode}): {_result.stderr[-300:]}")
+    except Exception as e:
+        print(f"  [Word/Analysis] Failed: {e}")
+
     print(f"\n{'=' * 60}")
     print("PIPELINE COMPLETE")
     for name, result in company_results.items():

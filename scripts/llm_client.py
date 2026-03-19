@@ -18,20 +18,19 @@ from utils import get_api_key, parse_json_response
 # Model Fallback Chain
 # ============================================================
 
-# Ordered by preference. On 503, try the next model in chain.
-# IMPORTANT: Only use NON-thinking models here.
-# Thinking models (gemini-2.5-pro, gemini-3-pro-preview) cannot have
-# thinking_budget=0 (API error) and by default consume most tokens on
-# internal reasoning → severely truncated output. Keep them out of the
-# standard chain. Use them explicitly only when deep reasoning is needed.
+# Ordered by preference. On 503/429/404, try the next model in chain.
+# Chain covers both Flash and Pro models for resilience against rate limits.
+# Pro models may use thinking tokens internally but still produce full output
+# for structured JSON and narrative tasks; acceptable as mid-chain fallbacks.
 MODEL_FALLBACK_CHAIN = [
-    "models/gemini-2.5-flash",       # primary: reliable, fast, full output
-    "models/gemini-3-flash-preview",  # secondary fallback
-    "models/gemini-3.1-flash-lite",  # tertiary fallback
+    "models/gemini-2.5-flash",          # 1st: Gemini 2.5 Flash — fast, reliable
+    "models/gemini-3-flash-preview",     # 2nd: Gemini 3 Flash
+    "models/gemini-2.5-pro",             # 3rd: Gemini 2.5 Pro — high quality
+    "models/gemini-3.1-pro-preview",     # 4th: Gemini 3.1 Pro — latest pro
+    "models/gemini-2.0-flash",           # 5th: Gemini 2 Flash — older but stable
 ]
 
-# Thinking models — DO NOT add to MODEL_FALLBACK_CHAIN.
-# Call them explicitly with a sufficient thinking budget when needed.
+# Thinking models (kept as reference; included in chain above as mid-fallbacks).
 THINKING_MODELS = {
     "models/gemini-2.5-pro",
     "models/gemini-3-pro-preview",
@@ -107,6 +106,9 @@ def generate_content(
         gen_config["temperature"] = temperature
     if max_output_tokens is not None:
         gen_config["max_output_tokens"] = max_output_tokens
+    if return_json:
+        # Force strict JSON output — avoids narrative/markdown wrapping
+        gen_config["response_mime_type"] = "application/json"
     
     last_error = None
 
