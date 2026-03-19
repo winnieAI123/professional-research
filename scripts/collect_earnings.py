@@ -1180,116 +1180,11 @@ Report Date: {report_date} | LLM: Gemini Multi-model Fallback
 
 
 # ============================================================
-# Post-report: Supplement Undisclosed Fields via Tavily
+# Post-report: Supplement Undisclosed Fields
 # ============================================================
-def supplement_undisclosed(md_path, ticker, company_name, quarter, output_dir):
-    """
-    After report generation, scan for '未披露' table cells, search Tavily for missing data,
-    patch the MD in-place, and re-convert to Word.
-    Returns True if any patches were applied.
-    """
-    with open(md_path, 'r', encoding='utf-8') as f:
-        md_content = f.read()
 
-    # Find all table rows containing 未披露
-    undisclosed_rows = []  # (line_idx, field_name, original_line)
-    lines = md_content.split('\n')
-
-    for i, line in enumerate(lines):
-        if '未披露' not in line or '|' not in line:
-            continue
-        cells = [c.strip() for c in line.split('|')]
-        cells = [c for c in cells if c]
-        if cells:
-            undisclosed_rows.append((i, cells[0], line))
-
-    if not undisclosed_rows:
-        print(f"  [Supplement] ✓ No undisclosed fields — report complete!")
-        return False
-
-    print(f"\n  [Supplement] Found {len(undisclosed_rows)} undisclosed field(s):")
-    for _, field, _ in undisclosed_rows[:12]:
-        print(f"    - {field}")
-
-    if not TAVILY_API_KEY:
-        print(f"  [Supplement] No TAVILY_API_KEY, skipping auto-supplement")
-        return False
-
-    # Batch search: one Tavily query per field (max 10 fields)
-    cn_name = _ADR_TO_CN.get(ticker, company_name)
-    search_data = {}  # field_name → search_content
-
-    for _, field, _ in undisclosed_rows[:10]:
-        query_str = f'"{cn_name}" OR "{ticker}" {quarter} {field} earnings results'
-        try:
-            resp = requests.post(
-                'https://api.tavily.com/search',
-                json={'api_key': TAVILY_API_KEY, 'query': query_str,
-                      'max_results': 3, 'search_depth': 'basic'},
-                timeout=15
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            content = data.get('answer', '') or ''
-            for r in data.get('results', [])[:2]:
-                content += f"\n{r.get('content', '')[:400]}"
-            if content.strip():
-                search_data[field] = content[:800]
-        except Exception as e:
-            print(f"    [Supplement] Search failed for '{field}': {e}")
-
-    if not search_data:
-        print(f"  [Supplement] Search returned no useful data")
-        return False
-
-    # LLM: extract specific values from search results (single batch call)
-    fields_list = '\n'.join([f"- {f}" for f in search_data.keys()])
-    search_text = '\n\n'.join([f"[{f}]\n{v}" for f, v in search_data.items()])
-
-    extract_prompt = f"""从以下搜索结果中，为{company_name} {quarter}的各财务指标提取具体数值。
-
-需要提取的指标：
-{fields_list}
-
-搜索结果：
-{search_text[:8000]}
-
-请输出JSON，格式：{{"指标名": "具体数值（如¥194.4B、+12.3%、2.3亿）", ...}}
-
-规则：
-- 只输出找到的具体数值，确实找不到就写"未找到"
-- 数值要简洁（如"¥194.4B"而非长句子）
-- 必须确认数值来自{company_name}，不是其他公司的数据
-- 只输出JSON，不要任何其他文字"""
-
-    extracted = _llm_json(extract_prompt, tag="SupplementExtract")
-    if not extracted:
-        print(f"  [Supplement] LLM extraction failed")
-        return False
-
-    # Apply patches to MD lines in-place
-    patches_applied = 0
-    for i, field, original_line in undisclosed_rows:
-        value = str(extracted.get(field, '')).strip()
-        if not value or value in ('未找到', '未披露', 'null', 'None', '-', ''):
-            continue
-        new_line = original_line.replace('未披露', value, 1)
-        if new_line != original_line:
-            lines[i] = new_line
-            patches_applied += 1
-            print(f"    ✓ {field}: → {value}")
-
-    if patches_applied == 0:
-        print(f"  [Supplement] No patches applied (values not found or confirmed)")
-        return False
-
-    # Save patched MD
-    patched_md = '\n'.join(lines)
-    with open(md_path, 'w', encoding='utf-8') as f:
-        f.write(patched_md)
-    print(f"  [Supplement] Patched MD saved ({patches_applied} fields updated)")
-
-    # Re-convert to Word
+def _reconv_to_word(md_path):
+    """Re-convert MD to Word after patching."""
     docx_path = md_path.replace('.md', '.docx')
     try:
         md_to_word_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'md_to_word.py')
@@ -1303,6 +1198,238 @@ def supplement_undisclosed(md_path, ticker, company_name, quarter, output_dir):
     except Exception as e:
         print(f"  [Supplement] Word re-conversion failed: {e}")
 
+
+def _get_undisclosed_rows(lines):
+    """Return list of (line_idx, field_name, original_line) for rows with '未披露'."""
+    rows = []
+    for i, line in enumerate(lines):
+        if '未披露' not in line or '|' not in line:
+            continue
+        cells = [c.strip() for c in line.split('|')]
+        cells = [c for c in cells if c]
+        if cells:
+            rows.append((i, cells[0], line))
+    return rows
+
+
+def _apply_patches(lines, undisclosed_rows, extracted):
+    """Apply extracted values to undisclosed rows. Returns (lines, count_patched, still_missing)."""
+    patched = 0
+    still_missing = []
+    for i, field, original_line in undisclosed_rows:
+        value = str(extracted.get(field, '')).strip()
+        if not value or value in ('未找到', '未披露', 'null', 'None', '-', '', 'N/A'):
+            still_missing.append((i, field, original_line))
+            continue
+        new_line = original_line.replace('未披露', value, 1)
+        if new_line != original_line:
+            lines[i] = new_line
+            patched += 1
+            print(f"    ✓ {field}: → {value}")
+        else:
+            still_missing.append((i, field, original_line))
+    return lines, patched, still_missing
+
+
+def supplement_from_press_release(md_path, pr_path, company_name, quarter):
+    """
+    Phase 1: Extract ALL objectively-disclosed financial data from the local press release
+    and patch the MD report. No external API calls needed.
+    Returns (lines, remaining_undisclosed_rows, total_patched).
+    """
+    with open(md_path, 'r', encoding='utf-8') as f:
+        lines = f.read().split('\n')
+
+    undisclosed_rows = _get_undisclosed_rows(lines)
+    if not undisclosed_rows:
+        return lines, [], 0
+
+    # Read press release (may be large; truncate to 40k chars which covers all tables)
+    try:
+        with open(pr_path, 'r', encoding='utf-8') as f:
+            pr_text = f.read(40000)
+    except FileNotFoundError:
+        print(f"  [Phase1] Press release not found: {pr_path}")
+        return lines, undisclosed_rows, 0
+
+    fields_list = '\n'.join([f"- {f}" for _, f, _ in undisclosed_rows])
+
+    extract_prompt = f"""你是财报数据提取专家。以下是{company_name} {quarter}季度财报原文（英文）。
+
+任务：从原文中找出以下字段的具体数值，并以JSON格式输出。
+
+需要提取的字段（中文名称）：
+{fields_list}
+
+财报原文：
+{pr_text}
+
+输出规则：
+1. 只输出JSON对象，key为字段中文名，value为从原文中提取的简洁数值
+2. 数值格式：金额用"¥/RMB/US$"前缀+数字+单位（如"¥2,972亿"），增速用百分比（如"+1.5%"），利润率用百分比
+3. 如果原文中明确有该数据，必须填入——禁止把原文中存在的数据写成"未找到"
+4. 原文中确实没有提及的字段才写"未找到"
+5. QoQ变化：若原文有上季度对比数据则计算，否则写"未找到"
+6. 只输出JSON，不要任何其他文字或解释"""
+
+    print(f"  [Phase1] Extracting {len(undisclosed_rows)} fields from press release...")
+    extracted = _llm_json(extract_prompt, tag="PR_Extract")
+    if not extracted:
+        print(f"  [Phase1] LLM extraction failed")
+        return lines, undisclosed_rows, 0
+
+    lines, patched, still_missing = _apply_patches(lines, undisclosed_rows, extracted)
+    print(f"  [Phase1] Patched {patched}/{len(undisclosed_rows)} fields from press release. "
+          f"{len(still_missing)} still missing.")
+    return lines, still_missing, patched
+
+
+def supplement_from_web(lines, undisclosed_rows, ticker, company_name, quarter):
+    """
+    Phase 2: For fields still missing after Phase 1, search the web.
+    Targets externally-sourced data: Beat/Miss consensus, analyst targets, historical quarters.
+    Returns (lines, total_patched).
+    """
+    if not undisclosed_rows:
+        return lines, 0
+
+    if not TAVILY_API_KEY:
+        print(f"  [Phase2] No TAVILY_API_KEY, skipping web supplement")
+        return lines, 0
+
+    cn_name = _ADR_TO_CN.get(ticker, company_name)
+
+    # Group fields into batches — use targeted queries for known external-data categories
+    BEAT_MISS_KEYWORDS = {'市场预期', 'Beat', 'Miss', '共识', '分析师预期', 'EPS共识', '营收共识'}
+    ANALYST_KEYWORDS = {'目标价', '评级', '分析师', 'Price Target'}
+    HIST_KEYWORDS = {'Q1', 'Q2', 'Q3', '上季', '历史', '季度趋势', 'QoQ'}
+
+    def _field_matches(field, keywords):
+        return any(k.lower() in field.lower() for k in keywords)
+
+    # Build targeted query groups
+    beat_fields = [(i, f, l) for i, f, l in undisclosed_rows if _field_matches(f, BEAT_MISS_KEYWORDS)]
+    analyst_fields = [(i, f, l) for i, f, l in undisclosed_rows if _field_matches(f, ANALYST_KEYWORDS)]
+    hist_fields = [(i, f, l) for i, f, l in undisclosed_rows if _field_matches(f, HIST_KEYWORDS)]
+    other_fields = [r for r in undisclosed_rows
+                    if r not in beat_fields and r not in analyst_fields and r not in hist_fields]
+
+    query_groups = []
+    if beat_fields:
+        query_groups.append((
+            f'"{ticker}" {quarter} earnings beat miss analyst consensus EPS revenue estimate',
+            beat_fields
+        ))
+    if analyst_fields:
+        query_groups.append((
+            f'"{ticker}" stock analyst price target rating {quarter} 2026',
+            analyst_fields
+        ))
+    if hist_fields:
+        query_groups.append((
+            f'"{cn_name}" OR "{ticker}" quarterly revenue Q1 Q2 Q3 2025 results financial',
+            hist_fields
+        ))
+    # Remaining fields: one broad query
+    if other_fields:
+        fields_str = ' '.join([f for _, f, _ in other_fields[:5]])
+        query_groups.append((
+            f'"{cn_name}" OR "{ticker}" {quarter} {fields_str} earnings results',
+            other_fields
+        ))
+
+    # Execute queries and collect content
+    search_data = {}  # field → content
+    for query_str, field_rows in query_groups:
+        try:
+            resp = requests.post(
+                'https://api.tavily.com/search',
+                json={'api_key': TAVILY_API_KEY, 'query': query_str,
+                      'max_results': 5, 'search_depth': 'basic'},
+                timeout=15
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            content = data.get('answer', '') or ''
+            for r in data.get('results', [])[:3]:
+                content += f"\n{r.get('content', '')[:600]}"
+            for _, field, _ in field_rows:
+                search_data[field] = content[:2000]
+        except Exception as e:
+            print(f"    [Phase2] Search failed: {e}")
+
+    if not search_data:
+        return lines, 0
+
+    fields_list = '\n'.join([f"- {f}" for f in search_data.keys()])
+    search_text = '\n\n'.join([f"[{f}]\n{v}" for f, v in search_data.items()])
+
+    extract_prompt = f"""从以下搜索结果中，为{company_name} {quarter}的各财务指标提取具体数值。
+
+需要提取的指标：
+{fields_list}
+
+搜索结果：
+{search_text[:10000]}
+
+请输出JSON，格式：{{"指标名": "具体数值", ...}}
+
+规则：
+- 只输出找到的具体数值，确实找不到就写"未找到"
+- 数值要简洁（如"$50.22B"、"BEAT +14%"、"Moderate Buy / 均价$36"）
+- 必须确认数值来自{company_name}，不是其他公司的数据
+- 只输出JSON，不要任何其他文字"""
+
+    extracted = _llm_json(extract_prompt, tag="WebExtract")
+    if not extracted:
+        return lines, 0
+
+    lines, patched, _ = _apply_patches(lines, undisclosed_rows, extracted)
+    print(f"  [Phase2] Patched {patched} additional fields from web search.")
+    return lines, patched
+
+
+def supplement_undisclosed(md_path, ticker, company_name, quarter, output_dir):
+    """
+    Two-phase supplement after report generation:
+      Phase 1 — read local _press_release.txt (no API quota consumed, covers all objectively disclosed data)
+      Phase 2 — web search for externally-sourced data (Beat/Miss, analyst targets, historical quarters)
+    Patches MD in-place and re-converts to Word.
+    """
+    with open(md_path, 'r', encoding='utf-8') as f:
+        initial_lines = f.read().split('\n')
+
+    undisclosed_rows = _get_undisclosed_rows(initial_lines)
+    if not undisclosed_rows:
+        print(f"  [Supplement] ✓ No undisclosed fields — report complete!")
+        return False
+
+    print(f"\n  [Supplement] Found {len(undisclosed_rows)} undisclosed field(s):")
+    for _, field, _ in undisclosed_rows:
+        print(f"    - {field}")
+
+    total_patched = 0
+
+    # --- Phase 1: local press release ---
+    pr_path = os.path.join(output_dir, f"{ticker}_press_release.txt")
+    lines, remaining, p1_count = supplement_from_press_release(md_path, pr_path, company_name, quarter)
+    total_patched += p1_count
+
+    # --- Phase 2: web search for remaining fields ---
+    if remaining:
+        lines, p2_count = supplement_from_web(lines, remaining, ticker, company_name, quarter)
+        total_patched += p2_count
+
+    if total_patched == 0:
+        print(f"  [Supplement] No patches applied.")
+        return False
+
+    # Save patched MD
+    with open(md_path, 'w', encoding='utf-8') as f:
+        f.write('\n'.join(lines))
+    print(f"  [Supplement] Total patches: {total_patched}. MD saved.")
+
+    _reconv_to_word(md_path)
     return True
 
 

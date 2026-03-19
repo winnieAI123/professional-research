@@ -325,6 +325,7 @@ class SECCollector:
                     'date': filings['filingDate'][i],
                     'accession': filings['accessionNumber'][i],
                     'primary_doc': filings['primaryDocument'][i],
+                    'size': filings.get('size', [0] * len(filings['form']))[i],
                 })
         return results
     
@@ -352,6 +353,78 @@ class SECCollector:
                     time.sleep(wait)
                 else:
                     raise
+
+
+    def get_filing_documents(self, cik: str, accession: str) -> list:
+        """Get all documents in a filing by parsing EDGAR HTML directory.
+        Returns list of dicts with keys: name, type.
+        Uses cik_int (no leading zeros) for archive URLs.
+        """
+        import re as _re
+        cik_int = str(int(cik))  # Strip leading zeros for archive URLs
+        acc_nodash = accession.replace('-', '')
+        url = f"https://www.sec.gov/Archives/edgar/data/{cik_int}/{acc_nodash}/"
+        try:
+            self._rate_limit()
+            resp = self.session.get(url, timeout=30)
+            resp.raise_for_status()
+            # Parse all archive file links from the HTML directory listing
+            links = _re.findall(
+                r'href="/Archives/edgar/data/[^"]+/([^"/]+\.(?:htm|html|xml|txt))"',
+                resp.text, _re.IGNORECASE
+            )
+            # Also find exhibit type labels (table cells near file links)
+            # Pattern: files with ex99 or ex-99 in name are EX-99.1
+            items = []
+            for fname in links:
+                ftype = ''
+                fname_lower = fname.lower()
+                if 'ex99-1' in fname_lower or 'ex99_1' in fname_lower or 'ex-99-1' in fname_lower:
+                    ftype = 'EX-99.1'
+                elif 'ex99' in fname_lower:
+                    ftype = 'EX-99'
+                elif '_6k' in fname_lower or fname_lower.endswith('_6k.htm'):
+                    ftype = '6-K'
+                items.append({'name': fname, 'type': ftype})
+            return items
+        except Exception:
+            return []
+
+    def download_exhibit_file(self, cik: str, accession: str, exhibit_type: str,
+                              filing_date: str, output_dir: str) -> str:
+        """Download a specific exhibit from a 6-K filing.
+
+        For foreign private issuers, the earnings press release is typically
+        filed as exhibit EX-99.1 and contains the full financial tables.
+
+        exhibit_type: 'EX-99.1' for earnings press release
+        Returns file path if successful, None otherwise.
+        """
+        acc_nodash = accession.replace('-', '')
+        items = self.get_filing_documents(cik, accession)
+        for item in items:
+            item_type = item.get('type', '').upper().replace(' ', '').replace('-', '')
+            target_type = exhibit_type.upper().replace(' ', '').replace('-', '')
+            if item_type == target_type:
+                filename = item.get('name', '')
+                if not filename:
+                    continue
+                filepath = os.path.join(output_dir, f"{filing_date}_{filename}")
+                if os.path.exists(filepath) and os.path.getsize(filepath) > 5000:
+                    return filepath
+                url = f"https://www.sec.gov/Archives/edgar/data/{str(int(cik))}/{acc_nodash}/{filename}"
+                try:
+                    self._rate_limit()
+                    resp = self.session.get(url, timeout=60)
+                    resp.raise_for_status()
+                    os.makedirs(output_dir, exist_ok=True)
+                    with open(filepath, 'w', encoding='utf-8') as f:
+                        f.write(resp.text)
+                    return filepath
+                except Exception as e:
+                    print(f"      [SEC] Failed to download exhibit {exhibit_type}: {e}")
+                    return None
+        return None  # exhibit not found in this filing
 
 
 def collect_sec_edgar(company: dict, query: str, target_years: list, data_dir: str) -> dict:
@@ -431,33 +504,61 @@ def collect_sec_quarterly(company: dict, query: str, num_quarters: int, data_dir
     extracted_count = 0
     
     # For 10-Q: straightforward, download and extract
-    # For 6-K: need to filter — only process filings with financial tables
-    candidates = filings[:num_quarters * 3] if quarterly_type == "6-K" else filings[:num_quarters]
-    
+    # For 6-K: foreign private issuers file many 6-Ks (not all financial).
+    #   Strategy: for each 6-K, first try exhibit 99.1 (earnings press release,
+    #   ~100KB+ with full tables). Fall back to primary doc if no exhibit.
+    #   Expand pool to num_quarters*10 to find enough earnings 6-Ks.
+    candidates = filings[:num_quarters * 10] if quarterly_type == "6-K" else filings[:num_quarters]
+
+    financial_keywords = ['revenue', 'income', 'profit', 'loss', 'balance',
+                          'assets', 'liabilities', 'cash flow', 'earnings',
+                          '\u6536\u5165', '\u5229\u6da6', '\u8d44\u4ea7', '\u8d1f\u503a']
+
+    # For 6-K: pre-filter by submission size.
+    # Earnings filings (cover + press release) are typically >200KB total.
+    # Cover-only 6-Ks are <20KB. This avoids fetching index for every filing.
+    if quarterly_type == "6-K":
+        candidates = [f for f in candidates
+                      if not isinstance(f.get("size", 0), (int, float))
+                      or f.get("size", 0) > 100000]
+        if not candidates:
+            candidates = filings[:num_quarters * 10]  # fallback if no size info
+        print(f"    After size filter: {len(candidates)} candidate 6-Ks")
+
     for filing in candidates:
         if extracted_count >= num_quarters:
             break
-        
-        path = collector.download_filing(cik, filing, raw_dir)
-        if not path:
-            continue
-        
-        # For 6-K: quick check if this filing has financial data
+
+        path = None
         if quarterly_type == "6-K":
+            # Try exhibit 99.1 first (earnings press release with financials)
+            path = collector.download_exhibit_file(
+                cik, filing['accession'], 'EX-99.1', filing['date'], raw_dir)
+            if path:
+                print(f"    [Q] Found exhibit 99.1: {os.path.basename(path)} ({filing['date']})")
+            else:
+                # Fall back to primary doc; skip if it's just a small cover page
+                primary = collector.download_filing(cik, filing, raw_dir)
+                if not primary:
+                    continue
+                if os.path.getsize(primary) < 15000:
+                    continue  # Cover-page 6-Ks are <15KB, skip
+                path = primary
+
+            # Validate: must have financial tables
             tables = _html_to_tables(path)
-            financial_keywords = ['revenue', 'income', 'profit', 'loss', 'balance',
-                                  'assets', 'liabilities', 'cash flow', 'earnings',
-                                  '收入', '利润', '资产', '负债']
             has_financial = False
-            if len(tables) >= 5:
-                # Check if tables contain financial keywords
-                sample_text = ' '.join(t['markdown'][:200].lower() for t in tables[:10])
+            if len(tables) >= 3:
+                sample_text = ' '.join(t['markdown'][:300].lower() for t in tables[:10])
                 if any(kw in sample_text for kw in financial_keywords):
                     has_financial = True
-            
             if not has_financial:
-                continue  # Skip non-financial 6-K
-        
+                continue  # Not a financial filing, skip
+        else:
+            path = collector.download_filing(cik, filing, raw_dir)
+            if not path:
+                continue
+
         print(f"    [Q] Extracting: {os.path.basename(path)} ({filing['date']})")
         
         # Use same extraction pipeline (filter + extract)
@@ -1126,6 +1227,341 @@ def _extract_from_pdfs(pdf_paths: list, query: str, target_years: list) -> dict:
     return {"data": all_data, "metadata": {"unit": target_unit}} if all_data else None
 
 
+
+# ============================================================
+# Path B2: Semi-Annual Data (non-listed institutions with 半年报)
+# ============================================================
+def collect_semi_annual(company: dict, query: str, data_dir: str) -> dict:
+    """
+    Collect semi-annual (H1/H2) report data for non-listed financial institutions.
+
+    Strategy:
+    - Search for 半年报/中期报告 PDFs via Tavily
+    - Download and extract with LLM (same pipeline as annual PDF)
+    - Period keys use "YYYY-H1" / "YYYY-H2" format
+
+    Used for: Chinese banks, consumer finance companies, insurance companies
+    that publish annual reports + semi-annual reports (but not quarterly).
+    Generalizable: any company routed to pdf_search path will use this.
+    """
+    search_name = company.get("search_name", company["name"])
+    current_year = datetime.now().year
+    target_years = list(range(current_year - 2, current_year + 1))
+
+    print(f"\n  [Semi-annual] Searching for 半年报 PDFs: {search_name}...")
+    semi_links = _search_semi_annual_reports(search_name, target_years)
+
+    if not semi_links:
+        print(f"    No PDFs found, trying web search for semi-annual data...")
+        return _collect_semi_annual_from_web(search_name, query, target_years)
+
+    raw_dir = os.path.join(data_dir, "raw", re.sub(r'[^\w]', '_', search_name) + "_semiannual")
+    os.makedirs(raw_dir, exist_ok=True)
+
+    period_paths = []
+    for link in semi_links:
+        path = _download_pdf(link["url"], raw_dir, link.get("filename", "semi_report.pdf"))
+        if path:
+            period_paths.append({"path": path, "period": link.get("period", "unknown")})
+            print(f"    ✓ Downloaded: {os.path.basename(path)} ({link.get('period', '')})")
+
+    if not period_paths:
+        return _collect_semi_annual_from_web(search_name, query, target_years)
+
+    semi_data = {}
+    for item in period_paths:
+        result = _extract_semi_annual_from_pdf(item["path"], query, item["period"])
+        if result and result.get("data"):
+            for group, metrics in result["data"].items():
+                if group not in semi_data:
+                    semi_data[group] = {}
+                for metric, periods_data in metrics.items():
+                    if metric not in semi_data[group]:
+                        semi_data[group][metric] = {}
+                    semi_data[group][metric].update(periods_data)
+            print(f"    ✓ Extracted: {item['period']}")
+
+    if not semi_data:
+        return _collect_semi_annual_from_web(search_name, query, target_years)
+
+    return {"data": semi_data, "metadata": {"source": "pdf_semi_annual", "period_format": "YYYY-H1"}}
+
+
+def _search_semi_annual_reports(search_name: str, target_years: list) -> list:
+    """Search for semi-annual report PDFs via Tavily."""
+    min_year = str(min(target_years))
+    max_year = str(max(target_years))
+    results = []
+    seen_periods = set()
+
+    if not TAVILY_API_KEY:
+        return []
+
+    try:
+        queries = [
+            f'{search_name} 半年报 PDF {max_year} {int(max_year)-1}',
+            f'{search_name} 中期报告 interim semi-annual report',
+        ]
+        for q in queries:
+            resp = requests.post("https://api.tavily.com/search", json={
+                "api_key": TAVILY_API_KEY,
+                "query": q,
+                "max_results": 5,
+            }, timeout=30)
+            data = resp.json()
+            for r in data.get("results", []):
+                url = r.get("url", "")
+                title = r.get("title", "")
+                if not (url.endswith('.pdf') or 'pdf' in url.lower()):
+                    continue
+                is_semi = any(kw in (url + title).lower() for kw in ['半年', '中期', 'interim', 'semi'])
+                if not is_semi:
+                    continue
+                year_match = re.search(r'20[12]\d', title + url)
+                year = year_match.group() if year_match else ""
+                if not year or not (min_year <= year <= max_year):
+                    continue
+                period = f"{year}-H1"
+                if period not in seen_periods:
+                    seen_periods.add(period)
+                    results.append({
+                        "url": url,
+                        "title": title,
+                        "period": period,
+                        "year": year,
+                        "filename": f"{search_name}_{year}_半年报.pdf",
+                    })
+    except Exception as e:
+        print(f"    Semi-annual search error: {e}")
+
+    print(f"    Found {len(results)} semi-annual reports: {[r['period'] for r in results]}")
+    return results
+
+
+def _collect_semi_annual_from_web(search_name: str, query: str, target_years: list) -> dict:
+    """Fallback: collect semi-annual key metrics via web search when no PDF found."""
+    current_year = max(target_years)
+    queries = [
+        f"{search_name} {current_year}年上半年 净利润 营收 贷款余额",
+        f"{search_name} {current_year-1}年上半年 净利润 营收",
+        f"{search_name} 半年业绩 H1 {current_year} financial results",
+    ]
+    all_content = []
+    for q in queries:
+        if not TAVILY_API_KEY:
+            break
+        try:
+            resp = requests.post("https://api.tavily.com/search", json={
+                "api_key": TAVILY_API_KEY,
+                "query": q,
+                "max_results": 3,
+                "include_raw_content": True,
+            }, timeout=20)
+            data = resp.json()
+            for r in data.get("results", []):
+                content = r.get("raw_content", r.get("content", ""))[:3000]
+                if content:
+                    all_content.append(f"Source: {r.get('url', '')}\n{content}")
+        except Exception:
+            continue
+
+    if not all_content:
+        return None
+
+    combined = '\n\n---\n\n'.join(all_content)
+    prompt = f"""从以下搜索结果中提取{search_name}的半年度财务数据:
+
+用户需求: {query}
+
+规则:
+- 期间用"YYYY-H1"或"YYYY-H2"格式（如"2025-H1"表示2025上半年）
+- 只提取明确标注为"上半年"、"H1"、"中期"的数据
+- 不编造数据
+
+输出JSON:
+{{
+  "data": {{
+    "数据组名": {{
+      "指标名(English)": {{"2025-H1": 值, "2024-H1": 值}}
+    }}
+  }},
+  "metadata": {{"unit": "亿元", "notes": "web search fallback"}}
+}}
+
+内容:
+{combined}"""
+
+    result = generate_content(prompt=prompt, max_output_tokens=4000)
+    if not result:
+        return None
+
+    try:
+        parsed = json.loads(result.strip().strip('```json').strip('```').strip())
+        return _normalize_extracted_json(parsed)
+    except Exception:
+        return None
+
+
+def _extract_semi_annual_from_pdf(pdf_path: str, query: str, period_label: str) -> dict:
+    """Extract semi-annual data from a PDF 半年报 using same pipeline as annual."""
+    try:
+        import pdfplumber
+    except ImportError:
+        return None
+
+    try:
+        text = ""
+        with pdfplumber.open(pdf_path) as pdf:
+            for page in pdf.pages[:60]:
+                tables = page.extract_tables()
+                for table in tables:
+                    rows = ['| ' + ' | '.join(str(c or '') for c in row) + ' |' for row in table]
+                    text += '\n'.join(rows) + '\n\n'
+                pt = page.extract_text()
+                if pt:
+                    text += pt + '\n'
+
+        if len(text) > 100000:
+            text = text[:100000]
+
+        year_match = re.search(r'20[12]\d', period_label)
+        year_str = year_match.group() if year_match else str(datetime.now().year - 1)
+        prev_year = str(int(year_str) - 1)
+
+        prompt = f"""从以下半年报（中期报告）文本中提取财务数据。
+
+用户需求: {query}
+报告期间: {period_label} (上半年/H1)
+
+规则:
+- 所有期间key使用"YYYY-H1"格式
+  当期用"{year_str}-H1"，去年同期用"{prev_year}-H1"
+- 找不到的不编造
+- 数值保持原始数字，不转换单位
+
+输出格式:
+{{
+  "data": {{
+    "数据组名": {{
+      "指标名(English)": {{"{year_str}-H1": 数值, "{prev_year}-H1": 数值}}
+    }}
+  }},
+  "metadata": {{"unit": "原始单位（如亿元/百万元）", "period": "{period_label}"}}
+}}
+
+文本:
+{text}"""
+
+        result = generate_content(prompt=prompt, max_output_tokens=6000)
+        if not result:
+            return None
+
+        parsed = json.loads(result.strip().strip('```json').strip('```').strip())
+        return _normalize_extracted_json(parsed)
+    except Exception as e:
+        print(f"      ✗ Semi-annual PDF extraction failed: {e}")
+        return None
+
+
+def _compute_annual_forecast(company_results: dict) -> dict:
+    """
+    Compute full-year estimates for companies with partial-year data.
+
+    Logic by data type:
+    - Quarterly (SEC 6-K): sum YYYY-Q1~Q4 → actual if 4Q present; extrapolate if <4Q
+    - Semi-annual (PDF 半年报): FY estimate = H1 / historical_H1_FY_ratio
+    - Neither: skip (e.g. web_search companies without high-frequency data)
+
+    Returns: {company_name: {key: {"value": X, "type": "...", "metric": ..., "group": ...}}}
+    """
+    forecasts = {}
+    current_year = datetime.now().year
+    forecast_year = str(current_year - 1)  # e.g. "2025" when running in 2026
+
+    for company_name, result in company_results.items():
+        if not result or not result.get("data"):
+            continue
+
+        company_fc = {}
+
+        # --- Strategy A: Sum quarterly data (SEC path) ---
+        quarterly_groups = {k: v for k, v in result["data"].items() if k.startswith("[季度]")}
+        if quarterly_groups:
+            for group, metrics in quarterly_groups.items():
+                group_key = group.replace("[季度] ", "").replace("[季度]", "")
+                for metric, periods in metrics.items():
+                    fy_vals = {
+                        k: v for k, v in periods.items()
+                        if re.match(rf'{forecast_year}-Q\d', str(k)) and isinstance(v, (int, float))
+                    }
+                    if not fy_vals:
+                        continue
+                    n = len(fy_vals)
+                    total = sum(fy_vals.values())
+                    if n == 4:
+                        estimate, ftype = total, "实际值 (4季度加总)"
+                    elif n >= 2:
+                        estimate = round(total * 4 / n)
+                        ftype = f"预测值 ({n}季度外推 ×{4/n:.2f})"
+                    else:
+                        continue
+                    fc_key = f"{group_key}|{metric}"
+                    company_fc[fc_key] = {
+                        "value": estimate, "type": ftype,
+                        "quarters": n, "metric": metric, "group": group_key,
+                    }
+
+        # --- Strategy B: Double semi-annual data (PDF path) ---
+        semi_groups = {k: v for k, v in result["data"].items() if k.startswith("[半年]")}
+        if semi_groups and not company_fc:
+            annual_groups = {k: v for k, v in result["data"].items()
+                             if not k.startswith("[季度]") and not k.startswith("[半年]")}
+
+            for group, metrics in semi_groups.items():
+                group_key = group.replace("[半年] ", "").replace("[半年]", "")
+                for metric, periods in metrics.items():
+                    # Find most recent H1 value
+                    h1_entries = sorted(
+                        [(k, v) for k, v in periods.items()
+                         if 'H1' in str(k) and isinstance(v, (int, float))],
+                        reverse=True
+                    )
+                    if not h1_entries:
+                        continue
+                    h1_period, h1_val = h1_entries[0]
+                    h1_year_m = re.search(r'20[12]\d', str(h1_period))
+                    if not h1_year_m:
+                        continue
+                    h1_year_str = h1_year_m.group()
+
+                    # Try to find historical H1/FY ratio
+                    ratio = 0.48  # default: H1 ≈ 48% of FY for Chinese financial institutions
+                    for ag, am in annual_groups.items():
+                        for am_metric, am_years in am.items():
+                            m_short = metric[:6].lower()
+                            if m_short in am_metric.lower() or am_metric[:6].lower() in m_short:
+                                fy_val = am_years.get(
+                                    h1_year_str,
+                                    am_years.get(int(h1_year_str) if h1_year_str.isdigit() else h1_year_str)
+                                )
+                                if fy_val and isinstance(fy_val, (int, float)) and fy_val > 0:
+                                    ratio = min(max(h1_val / fy_val, 0.3), 0.7)
+                                    break
+
+                    estimate = round(h1_val / ratio)
+                    ftype = f"预测值 (H1÷{ratio:.0%}历史季节性)"
+                    fc_key = f"{group_key}|{metric}"
+                    company_fc[fc_key] = {
+                        "value": estimate, "type": ftype, "h1_ratio": ratio,
+                        "h1_period": h1_period, "metric": metric, "group": group_key,
+                    }
+
+        if company_fc:
+            forecasts[company_name] = company_fc
+
+    return forecasts
+
+
 # ============================================================
 # Path C: Web Search Fallback
 # ============================================================
@@ -1332,6 +1768,7 @@ def generate_word_report(company_results: dict, query: str, years: int, output_d
     
     appendix_letter = ord('A')
     has_quarterly = False
+    has_semi_annual = False
     
     for company_name, result in company_results.items():
         if not result or not result.get("data"):
@@ -1340,11 +1777,15 @@ def generate_word_report(company_results: dict, query: str, years: int, output_d
             appendix_letter += 1
             continue
         
-        # Split annual vs quarterly
-        annual_groups = {k: v for k, v in result["data"].items() if not k.startswith("[季度]")}
+        # Split annual vs high-frequency (quarterly / semi-annual)
+        annual_groups = {k: v for k, v in result["data"].items()
+                         if not k.startswith("[季度]") and not k.startswith("[半年]")}
         quarterly_groups = {k: v for k, v in result["data"].items() if k.startswith("[季度]")}
+        semi_annual_groups = {k: v for k, v in result["data"].items() if k.startswith("[半年]")}
         if quarterly_groups:
             has_quarterly = True
+        if semi_annual_groups:
+            has_semi_annual = True
         
         if not annual_groups:
             appendix_letter += 1
@@ -1467,10 +1908,118 @@ def generate_word_report(company_results: dict, query: str, years: int, output_d
                 doc.add_paragraph()
     
     # ================================================================
+    # ================================================================
+    # Part 3: Semi-Annual Data (non-listed institutions with 半年报)
+    # ================================================================
+    if has_semi_annual:
+        doc.add_heading('三、最近半年度数据', level=1)
+        doc.add_paragraph('数据来源: 年报PDF或公告。期间格式: YYYY-H1 (上半年) / YYYY-H2 (下半年)。')
+
+        for company_name, result in company_results.items():
+            if not result or not result.get("data"):
+                continue
+
+            semi_groups = {k: v for k, v in result["data"].items() if k.startswith("[半年]")}
+            if not semi_groups:
+                continue
+
+            doc.add_heading(f'{company_name}', level=2)
+
+            for group_name, metrics in semi_groups.items():
+                display_name = group_name.replace("[半年] ", "").replace("[半年]", "")
+                doc.add_heading(display_name, level=3)
+
+                all_periods = sorted(set(
+                    str(p) for m in metrics.values()
+                    if isinstance(m, dict)
+                    for p in m.keys()
+                    if re.match(r'^\d{4}-H[12]$', str(p))
+                ))
+
+                if not all_periods:
+                    continue
+
+                headers = ['指标'] + all_periods
+                table = doc.add_table(rows=1, cols=len(headers))
+                table.style = 'Table Grid'
+
+                for i, h in enumerate(headers):
+                    cell = table.rows[0].cells[i]
+                    cell.text = h
+                    _set_cell_font(cell, size=Pt(9))
+                    cell.paragraphs[0].runs[0].bold = True
+
+                for metric_name, periods_data in metrics.items():
+                    if not isinstance(periods_data, dict):
+                        continue
+                    h_keys = [k for k in periods_data.keys() if re.match(r'^\d{4}-H[12]$', str(k))]
+                    if not h_keys:
+                        continue
+
+                    row = table.add_row()
+                    row.cells[0].text = metric_name
+                    _set_cell_font(row.cells[0])
+
+                    for i, period in enumerate(all_periods, 1):
+                        val = periods_data.get(period, "")
+                        row.cells[i].text = _flatten_value(val)
+                        _set_cell_font(row.cells[i])
+
+                doc.add_paragraph()
+
+    # ================================================================
+    # Part 4: Full-Year Forecast (from quarterly or semi-annual data)
+    # ================================================================
+    _forecasts = _compute_annual_forecast(company_results)
+    if _forecasts:
+        _next_part = 2 + (1 if has_quarterly else 0) + (1 if has_semi_annual else 0) + 1
+        _part_zh = ['一', '二', '三', '四', '五', '六'][min(_next_part - 1, 5)]
+        doc.add_heading(f'{_part_zh}、全年预测值', level=1)
+        _forecast_year = str(datetime.now().year - 1)
+        doc.add_paragraph(
+            f'基于高频数据（季报/半年报）外推的{_forecast_year}年全年估算值。'
+            '实际值（4季度齐全时）标注"实际值"，外推值标注"预测值"及推算方法。'
+        )
+
+        for company_name, fc_data in _forecasts.items():
+            if not fc_data:
+                continue
+            doc.add_heading(f'{company_name}', level=2)
+
+            groups_seen = {}
+            for key, item in fc_data.items():
+                g = item.get("group", "预测数据")
+                if g not in groups_seen:
+                    groups_seen[g] = []
+                groups_seen[g].append(item)
+
+            for group_key, items in groups_seen.items():
+                doc.add_heading(group_key, level=3)
+                table = doc.add_table(rows=1, cols=4)
+                table.style = 'Table Grid'
+
+                for i, h in enumerate(['指标', f'{_forecast_year}预测/实际值', '推算依据', '备注']):
+                    cell = table.rows[0].cells[i]
+                    cell.text = h
+                    _set_cell_font(cell, size=Pt(9))
+                    cell.paragraphs[0].runs[0].bold = True
+
+                for item in items:
+                    row = table.add_row()
+                    row.cells[0].text = item.get("metric", "")
+                    row.cells[1].text = _format_number(item.get("value", ""))
+                    row.cells[2].text = item.get("type", "")
+                    row.cells[3].text = ""
+                    for cell in row.cells:
+                        _set_cell_font(cell)
+
+                doc.add_paragraph()
+
     # Part 3: Data Source Description
     # ================================================================
-    source_part = '三' if has_quarterly else '二'
-    doc.add_heading(f'{source_part}、数据来源', level=1)
+    _source_part_num = 1 + (1 if has_quarterly else 0) + (1 if has_semi_annual else 0) + (1 if _forecasts else 0) + 1
+    _source_zh = ['一', '二', '三', '四', '五', '六'][min(_source_part_num - 1, 5)]
+    doc.add_heading(f'{_source_zh}、数据来源', level=1)
     
     source_descriptions = {
         'sec_edgar': 'SEC EDGAR（20-F/10-K 表格提取）',
@@ -1655,7 +2204,31 @@ def run_pipeline(companies: list, query: str, years: int = 5, output_dir: str = 
                         print(f"  ⚠ No quarterly data available")
                 except Exception as e:
                     print(f"  ⚠ Quarterly collection failed: {e}")
-            
+
+            # === Semi-Annual Data (PDF/non-listed path) ===
+            # For non-listed institutions with annual reports (banks, consumer finance co.),
+            # also collect semi-annual (H1) data as high-frequency proxy.
+            # Generalizable: triggers for any company on pdf_search route.
+            if source == "pdf_search" and result and result.get("data"):
+                print(f"\n  [Semi-annual] Collecting H1 data for {name}...")
+                try:
+                    semi_result = collect_semi_annual(company, query, data_dir)
+                    if semi_result and semi_result.get("data"):
+                        for group, metrics in semi_result["data"].items():
+                            semi_group = f"[半年] {group}" if not group.startswith("[半年]") else group
+                            if semi_group not in result["data"]:
+                                result["data"][semi_group] = {}
+                            for metric, periods_data in metrics.items():
+                                if metric not in result["data"][semi_group]:
+                                    result["data"][semi_group][metric] = {}
+                                result["data"][semi_group][metric].update(periods_data)
+                        result["metadata"]["has_semi_annual"] = True
+                        print(f"  ✓ Semi-annual data added: {len(semi_result['data'])} groups")
+                    else:
+                        print(f"  ⚠ No semi-annual data available for {name}")
+                except Exception as e:
+                    print(f"  ⚠ Semi-annual collection failed: {e}")
+
             if result and result.get("data"):
                 groups = list(result["data"].keys())
                 total_metrics = sum(len(m) for g in result["data"].values() for m in g.values() if isinstance(m, dict))
