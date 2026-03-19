@@ -766,44 +766,31 @@ cd "C:/Users/wangtian/.claude/skills/professional-research" && python scripts/ru
 
 **🛑 MANDATORY: Type 8A Execution Workflow**
 
-> ❌ **FORBIDDEN**: 禁止自己手动搜索财务数据再拼报告。脚本自动处理一切。
-> ❌ **FORBIDDEN**: 禁止跳过脚本直接用 web search 或 yfinance 拼凑数据。
-> ✅ **FIRST ACTION**: 收到请求后，你的第一个动作必须是运行脚本。
+> 设计原则：**快速获取数据、清晰呈现数字**。报告只有数据表格，零 LLM 叙事分析。
 
-**Phase 1: Run Script（第一步，必须先跑脚本）**
+**Step 1: 运行脚本**
 
 从用户输入提取：公司名列表、查询内容、时间范围。然后运行：
 
 ```bash
-cd "C:/Users/wangtian/.claude/skills/professional-research" && python scripts/collect_financial_deep.py --companies "公司1,公司2,公司3" --query "用户的查询内容" --years N --output "D:/clauderesult/claudeMMDD/"
+cd "C:/Users/wangtian/.claude/skills/professional-research" && python scripts/collect_financial_deep.py --companies "公司1,公司2" --query "用户的查询内容" --years N --output "D:/clauderesult/claudeMMDD/"
 ```
 
-> ⚠️ `--output` 用当天日期路径（如 `claude0317`）。
-> 脚本会自动完成：公司识别 → 数据源路由 → 年报数据提取 → **SEC 公司自动追加最近 5 个季度数据（10-Q/6-K）** → JSON 保存 → Word 报告生成。
+> 脚本自动完成全部流程：公司识别 → 数据源路由（SEC/PDF/Web/东财） → 年报数据提取 → SEC 公司自动追加最近 5 个季度（10-Q/6-K） → 最新年份缺失自动 Web 补充 → JSON 保存 → **纯数据表格 Word 报告生成**（零 LLM 二次加工）。
 
-**Phase 2: Review Output & Supplementary Search（脚本完成后检查）**
+**Step 2: 检查输出**
 
-1. **读 JSON**：检查 `extracted_data.json`，确认每家公司是否有数据
-2. **检查覆盖度**：
-   - 每家公司的目标年份是否全部覆盖？
-   - 关键指标（用户要求的：余额/收入/利润等）是否有数据？
-   - SEC 公司：是否有季度数据？（`[季度]` 前缀的数据组）
-3. **最新年份特别关注**：
+1. 确认 `.docx` 和 `extracted_data.json` 已生成
+2. 向用户报告：每家公司的数据源类型、覆盖年份范围
+3. 如果某家公司完全没有数据，说明原因
 
-> **脚本已内置最新年份 fallback**：如果主路径（SEC/PDF/EastMoney）拿不到最近 1-2 年的数据（年报未发布），脚本会自动追加 web search 补充。
-> 
-> 但如果脚本的 web search 补充仍不够，**Agent 必须手动补充**：
-> - 用 Tavily MCP、Google Search MCP 或原生 web search 搜索 `"[公司名] 2025年 收入 利润 业绩"`
-> - 搜索最新的季度业绩报告、监管披露、新闻报道
-> - 将搜到的数据补充到报告分析段落中，并标注`（来源：网络搜索，数据可靠性：medium）`
-> - **最多 2 轮补充搜索**，搜不到就在报告中注明"截至报告日期，该年度财务数据尚未正式披露"
+**Step 3: 交付**
 
-**Phase 3: Verify & Deliver**
+直接交付文件。不需要在 chat 中重复报告内容。
 
-1. 确认 Word 报告已生成（`D:/clauderesult/claudeMMDD/` 下的 `.docx` 文件）
-2. 报告结构应包含：二、详细年度数据附录 + 三、最新季度数据（如有） + 数据来源说明
-3. 如果 Word 生成失败，手动用 `save_report()` 从 Markdown 生成
-4. 向用户报告：每家公司的数据源类型、覆盖年份、季度覆盖范围、数据量
+> ❌ **FORBIDDEN**: 禁止自己手动搜索财务数据再拼报告。
+> ❌ **FORBIDDEN**: 禁止在报告中追加 LLM 生成的分析段落。
+> ✅ 报告输出 = **数据表格 + 数据来源**，仅此而已。
 
 **Sub-type B: Quarterly Earnings Analysis (季度业绩分析)**
 **Triggers**: User asks about **a single company's latest quarterly results**. Key phrases:
@@ -811,75 +798,57 @@ cd "C:/Users/wangtian/.claude/skills/professional-research" && python scripts/co
 - "[公司名] 最新财报", "earnings update", "post-earnings", "业绩会"
 - Company name + any quarter/fiscal year reference
 **Template**: `templates/earnings_quarterly.md`
-**Data sources**: Earnings Call Transcript + Press Release + SEC/交易所公告 + Web search
 
-**🛑🛑🛑 MANDATORY: 必须运行 collect_earnings.py 🛑🛑🛑**
+**🛑🛑🛑 核心原则：脚本驱动，禁止手动搜索 🛑🛑🛑**
 
-> ❌ **FORBIDDEN**: 禁止在运行脚本之前调用 yfinance、Tavily、Google Search 或任何 MCP 搜索工具获取财报数据。
-> ❌ **FORBIDDEN**: 禁止在脚本运行前或运行中开始写报告。
-> ❌ **FORBIDDEN**: 禁止用二手新闻摘要替代 Earnings Call Transcript 原文。
-> ✅ **FIRST ACTION**: 收到请求后，你的第一个动作必须是运行 `collect_earnings.py`。不要做任何 yfinance 查询、不要做任何搜索、不要获取股价。脚本内部会自动完成所有数据收集。
-> ✅ **SUPPLEMENTARY SEARCH**: 只有在脚本运行完成且数据不足时，才可以用搜索工具补充。
-
-**为什么不能手动搜？**
-脚本获取的 Transcript (41K+ chars) 和 PR PDF (完整财务表格) 远优于 Google 搜索摘要 (300 chars)。手动搜 = 数据质量降 90%。脚本内部已包含 IR 官网爬取 → Tavily 搜索 → yfinance 补充的完整数据链。
+> ❌ **FORBIDDEN**: 禁止在运行脚本之前或替代脚本使用 Tavily、Google Search、yfinance 或任何 MCP 工具搜索财报数据。
+> ❌ **FORBIDDEN**: 禁止自行判断"最新季度"是什么——脚本内部 `discover_latest_quarter()` 会自动通过 SA API 确定。
+> ❌ **FORBIDDEN**: 禁止在脚本运行前开始写报告。
+> ✅ **FIRST AND ONLY ACTION**: 收到请求后，**立即运行脚本**，不做任何其他操作。
 
 ---
 
-**Phase 1: Data Collection — 脚本必须先跑！**
+**完整工作流（3 步，按顺序执行）**
 
-**Step 1.1: 运行脚本（FIRST STEP, NON-NEGOTIABLE）**
+**Step 1: 运行脚本（MANDATORY FIRST ACTION）**
+
 ```bash
 cd "C:/Users/wangtian/.claude/skills/professional-research" && python scripts/collect_earnings.py --ticker [TICKER] --output "D:/clauderesult/claudeMMDD/"
 ```
 
-> ⚠️ 用 `D:/clauderesult/claudeMMDD/` 替换为当天日期的实际路径。
+> ⚠️ `claudeMMDD` 替换为当天日期（如 `claude0319`）。
 
-脚本会自动执行 4 步:
-1. 获取 Seeking Alpha Transcript（含重试），保存 `{TICKER}_transcript.txt`
-2. LLM 分析 Transcript，生成摘要
-3. 下载 IR 官网 PR PDF + yfinance，保存:
-   - `{TICKER}_press_release.txt` (提取的纯文本)
-   - `{TICKER}_press_release.pdf` (PDF 原件)
-   - `{TICKER}_extracted_data.json` (LLM 提取的结构化数据)
-4. 运行 Data Quality 检查 → 逐章生成报告 (8 次 LLM) → 输出 .md + .docx
+脚本内部会自动完成：
+- **Step 0**: Quarter Discovery — 通过 SA API 自动判断最新季度（如 Q4 2025）
+- **Step 1**: 获取 SA Transcript — 仅匹配最新季度，不会拿旧季度凑数
+- **Step 2**: LLM 分析 Transcript
+- **Step 3**: 下载 IR 官网 PDF + yfinance 数据
+- **Step 4**: 生成完整 .md + .docx 报告
 
 **预计耗时**: 5-7 分钟。**必须等脚本完成**。
 
-- ✅ 如果成功: output 目录下有完整文件集
-- ❌ 如果超时/失败: 转 Step 1.2
+**Step 2: 检查脚本输出 — Transcript 是否获取成功？**
 
-**Step 1.2: 手动搜索 Transcript（仅在脚本完全失败时）**
+脚本运行完检查日志，重点看这一行：
+- ✅ `✓ Found transcript matching target Q4 2025` → Transcript 获取成功，直接进 Step 3
+- ⚠️ `⚠ No transcript for Q4 2025 on SA yet` → Transcript 尚未上线，执行以下流程：
 
-> 🚨 **MUST DO** — 没有 Transcript 就不能写第五章（Earnings Call 摘录）。绝不可用新闻摘要替代。
+**当 Transcript 缺失时的处理流程**：
+1. **先问用户**：「SA 上 [Q4 2025] 的 Transcript 尚未上线。您手头有业绩会纪要文件吗？如有请提供文件路径，我将用 `--transcript-file` 参数重新运行脚本。」
+2. **如果用户提供了文件**：重新运行脚本：
+```bash
+python scripts/collect_earnings.py --ticker [TICKER] --transcript-file "用户提供的文件路径" --output "D:/clauderesult/claudeMMDD/"
+```
+3. **如果用户没有文件或不想提供**：脚本内置的 Tavily fallback 已自动搜索过。报告会基于 IR 官网 PDF 数据生成，第五章（管理层讨论）标注「Transcript 暂未公开，本章内容基于 IR 新闻稿」。
 
-搜索顺序：
-1. **Seeking Alpha**: 搜索 `"[Company] latest earnings call transcript"` → 提取全文
-2. **公司 IR 官网**: `investor.[company].com` → 找 "Earnings Call Transcript"
-3. **AlphaStreet / Motley Fool**: 搜索 `"[Company] Q[X] [Year] earnings call transcript"`
+> 🚨 **关键**：无论什么情况，**禁止自己用 Tavily/Google 手动搜索财报数据来写报告**。所有数据获取都通过脚本完成。脚本的 IR scraper 会从公司官网获取最新 PDF（一定是最新季度的），这是最权威的数据源。
 
-对于中国公司（如阿里巴巴/拼多多/京东/B站）：
-- 搜索 `"[Company] [报告期] earnings call transcript site:seekingalpha.com"` 
-- IR 官网通常有英文 Transcript PDF
+**Step 3: 报告已由脚本自动生成**
 
-**Step 1.3: 获取官方 Press Release（仅在脚本未获取到时）**
-- 搜索 `"[Company] [quarter] earnings press release"`
-- **必须获取官方数字** — 不能只依赖新闻报道的数字
-
-**Step 1.4: 补充数据（仅补充脚本未覆盖的内容）**
-- 搜索行业竞品数据（用于第五章竞争格局）
-- 搜索共识预期（用于 Beat/Miss 分析）
-
----
-
-**⛔ Phase 1 完成检查 — 必须满足以下条件才能进入 Phase 2：**
-
-- [ ] ✅ 有完整的 **Earnings Call Transcript**（不是新闻摘要）
-- [ ] ✅ 有官方 **Press Release / 财报** 中的核心财务数据
-- [ ] ✅ 知道 **报告期**（FY/Q几、起止月份）
-- [ ] ✅ 有 **共识预期** 数据（用于 Beat/Miss）
-
-**如果缺少 Transcript**：在报告中第五章明确标注"Earnings Call 完整文稿未公开获取，以下引述来自新闻报道摘要，可能不完整"。**绝不伪造管理层原话。**
+脚本输出目录中已有 `{TICKER}_report.md` 和 `{TICKER}_report.docx`。你的工作：
+- 读取 `.md` 报告并呈现给用户
+- 如需补充竞品数据/共识预期，**此时**（且仅此时）可用搜索工具
+- 不要重写报告的财务数据部分——脚本已从官方源提取
 
 ---
 

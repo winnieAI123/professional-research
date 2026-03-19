@@ -4,19 +4,19 @@
 
 Type 8 is designed for users who want **precise financial numbers** (revenue, profit, balance by product, multi-year trends) for **one or more companies**, rather than a full narrative company report (Type 2).
 
+**设计原则**: 快速获取数据、清晰呈现数字。报告只有数据表格，零 LLM 叙事分析。
+
 ## When to Use Type 8 (vs Type 2)
 
 | Signal | Type 2 (Company Research) | Type 8 (Financial Data) |
 |--------|--------------------------|------------------------|
 | User intent | "研究一下MongoDB" | "蚂蚁和微众过去5年收入利润" |
 | Keywords | "研究", "分析", "deep dive" | "过去N年", "分产品", "收入利润", "余额" |
-| Output | 9-chapter narrative report | Data tables + brief analysis |
+| Output | 9-chapter narrative report | **Data tables only** |
 | Companies | Single | **Multiple** supported |
 | Depth | Wide (qualitative + quantitative) | **Deep** (numbers only) |
 
 ## Dynamic Data Source Routing
-
-The script auto-detects the best data source for each company:
 
 ```
 For each company name in user query:
@@ -34,51 +34,43 @@ For each company name in user query:
 
 **No hardcoded company config** — works for any company the user names.
 
-## Data Extraction Methods
+## Data Coverage
 
-### Path A: SEC EDGAR (US-listed companies)
-- **How**: Download 20-F/10-K HTML → parse all `<table>` → Flash filter → Pro extract
-- **Precision**: Highest (official SEC filings)
-- **Examples**: QFIN, FINV, LU, MDB, AAPL
+### Annual Data
+- SEC: 20-F/10-K → HTML table parsing → LLM extraction
+- CN-listed: EastMoney F10 (income statement, indicators)
+- PDF: Annual reports → pdfplumber → LLM extraction
+- Web: Tavily multi-query → LLM summarization
 
-### Path B: CN-listed (A-stock / HK-stock)
-- **How**: Uses existing `collect_financials.py` (EastMoney F10 + Sina)
-- **Precision**: High (income statement, indicators, market data)
-- **Examples**: 300418 (昆仑万维), 601398 (工商银行)
+### Quarterly Data (SEC companies only)
+- Automatically collects **last 5 quarters** (10-Q or 6-K)
+- Critical for timeliness: annual reports lag 3-6 months
 
-### Path C: PDF Annual Reports (non-listed institutions)
-- **How**: Tavily search PDF → download → pdfplumber extract → LLM extract
-- **Precision**: Medium-high (depends on PDF quality)
-- **Examples**: 微众银行, 网商银行, 消费金融公司
-
-### Path D: Web Search (no public filings)
-- **How**: Multi-query Tavily → LLM summarize with reliability tags
-- **Precision**: Low-medium (scattered public data)
-- **Examples**: 蚂蚁集团, ByteDance (pre-IPO)
-
-## Unit Normalization
-
-Critical for multi-PDF extraction where different years use different units:
-- LLM returns original units in metadata
-- Python does deterministic multiplication: 万元→千元 (×10), 亿元→千元 (×100000)
-- Final output unified to 千元RMB
+### Latest Year Fallback
+- If annual report not yet published, auto-supplements with web search
+- Tagged with `web_supplemented_years` in metadata
 
 ## Output Format
 
 ```
-Word Report:
-  一、核心发现与分析
-    - Per company: facts only (balance CAGR, revenue growth, profit margin)
-    - No cross-comparison, no editorial opinions
+Word Report (pure data tables, zero narrative):
+  一、年度数据
+    A. Company1（SEC）
+      - Group1 table (指标 × 年份)
+      - Group2 table
+    B. Company2（PDF年报）
+      - Group1 table
   
-  二、详细数据附录
-    附录A: Company1 (multi-year tables per data group)
-    附录B: Company2
-    ...
+  二、最近季度数据（if available）
+    Company1
+      - Quarterly table (指标 × YYYY-QN)
+  
+  三、数据来源
+    Per-company: source type, unit, reliability
 ```
 
 ## Anti-Fabrication Rules
 
 1. LLM extraction: "找不到的年份不要编造"
 2. Web search: reliability tagged as high/medium/low
-3. Analysis paragraphs: "只描述事实和数据变化, 不写启示, 不编造"
+3. Report: **no narrative analysis, no editorial opinions, just data tables**

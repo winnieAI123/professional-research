@@ -248,37 +248,184 @@ Just the ticker, nothing else."""
 
 
 # ============================================================
-# Step 1: Fetch Transcript (Seeking Alpha)
+# Step 0: Quarter Discovery — determine latest earnings quarter
 # ============================================================
-def fetch_transcript(ticker):
+def discover_latest_quarter(ticker, company_name):
+    """
+    Determine the latest earnings quarter by checking SA API + IR page.
+    Returns (target_quarter, sa_transcript_available, sa_items).
+    
+    target_quarter: e.g. "Q4 2025"
+    sa_transcript_available: True if SA has the transcript for target_quarter
+    sa_items: raw SA API items for reuse by fetch_transcript()
+    """
+    print(f"  [Step 0] Discovering latest quarter for {ticker}...")
+    
     headers = {
         'x-rapidapi-host': 'seeking-alpha.p.rapidapi.com',
         'x-rapidapi-key': RAPIDAPI_KEY,
     }
-    print(f"    [SA] Searching transcripts for {ticker}...")
-    try:
-        resp = requests.get(
-            'https://seeking-alpha.p.rapidapi.com/transcripts/v2/list',
-            params={'id': ticker.lower(), 'size': '5'},
-            headers=headers, timeout=20
+    
+    sa_items = []
+    sa_quarters = []  # [(quarter_str, title, date, is_transcript), ...]
+    
+    # 1. Check SA API for all recent items
+    if RAPIDAPI_KEY:
+        try:
+            resp = requests.get(
+                'https://seeking-alpha.p.rapidapi.com/transcripts/v2/list',
+                params={'id': ticker.lower(), 'size': '10'},
+                headers=headers, timeout=20
+            )
+            resp.raise_for_status()
+            sa_items = resp.json().get('data', [])
+            
+            for item in sa_items:
+                attrs = item.get('attributes', {})
+                title = attrs.get('title', '')
+                pub_date = attrs.get('publishOn', '')[:10]
+                qm = re.search(r'Q(\d)\s+(\d{4})', title)
+                if qm:
+                    q_str = f"Q{qm.group(1)} {qm.group(2)}"
+                    is_transcript = 'transcript' in title.lower()
+                    sa_quarters.append((q_str, title, pub_date, is_transcript))
+            
+            if sa_quarters:
+                print(f"    [SA] Found {len(sa_quarters)} items, quarters: {list(set(q[0] for q in sa_quarters))}")
+        except Exception as e:
+            print(f"    [SA] API check failed: {e}")
+    
+    # 2. Determine the latest quarter from SA data
+    # SA items are ordered by publish date (newest first)
+    # The latest quarter is whatever appears first, regardless of type
+    latest_from_sa = None
+    transcript_available = False
+    
+    if sa_quarters:
+        latest_from_sa = sa_quarters[0][0]  # e.g. "Q4 2025"
+        # Check if transcript (not just presentation) exists for this quarter
+        transcript_available = any(
+            q[0] == latest_from_sa and q[3]  # q[3] = is_transcript
+            for q in sa_quarters
         )
-        resp.raise_for_status()
-        items = resp.json().get('data', [])
-    except Exception as e:
-        print(f"    x Transcript list failed: {e}")
-        return None
+        
+        if transcript_available:
+            print(f"    ✓ Latest quarter: {latest_from_sa} (transcript available on SA)")
+        else:
+            print(f"    ⚠ Latest quarter: {latest_from_sa} (presentation only, transcript NOT yet on SA)")
+            # Check if there's a transcript for an older quarter
+            older_transcripts = [q for q in sa_quarters if q[3]]
+            if older_transcripts:
+                print(f"    ℹ Latest available transcript: {older_transcripts[0][0]} ({older_transcripts[0][2]})")
+    
+    # 3. Fallback: use Tavily to discover if SA check failed
+    if not latest_from_sa and TAVILY_API_KEY:
+        print(f"    [Tavily] Searching for latest quarter...")
+        try:
+            cn_name = _ADR_TO_CN.get(ticker, company_name)
+            query = f"{cn_name} OR {company_name} latest quarterly earnings results 2025 2026"
+            tavily_resp = requests.post(
+                'https://api.tavily.com/search',
+                json={'api_key': TAVILY_API_KEY, 'query': query,
+                      'max_results': 3, 'search_depth': 'basic'},
+                timeout=15
+            )
+            tavily_resp.raise_for_status()
+            answer = tavily_resp.json().get('answer', '') or ''
+            # Try to extract quarter from answer + results
+            search_text = answer
+            for r in tavily_resp.json().get('results', [])[:3]:
+                search_text += ' ' + r.get('title', '') + ' ' + r.get('content', '')[:200]
+            qm = re.search(r'Q(\d)\s+(\d{4})', search_text)
+            if qm:
+                latest_from_sa = f"Q{qm.group(1)} {qm.group(2)}"
+                print(f"    ✓ Tavily suggests latest quarter: {latest_from_sa}")
+        except Exception as e:
+            print(f"    [Tavily] Quarter discovery failed: {e}")
+    
+    target_quarter = latest_from_sa or ''
+    print(f"  [Step 0] Target quarter: {target_quarter or 'unknown'}, "
+          f"SA transcript: {'yes' if transcript_available else 'no'}")
+    
+    return target_quarter, transcript_available, sa_items
+
+
+# ============================================================
+# Step 1: Fetch Transcript (Seeking Alpha)
+# ============================================================
+def fetch_transcript(ticker, target_quarter='', sa_items=None):
+    """Fetch transcript from SA, prioritizing target_quarter if specified.
+    
+    Args:
+        ticker: SA ticker symbol
+        target_quarter: e.g. "Q4 2025" — if set, only return transcript matching this quarter
+        sa_items: pre-fetched SA API items from discover_latest_quarter() to avoid duplicate API call
+    """
+    headers = {
+        'x-rapidapi-host': 'seeking-alpha.p.rapidapi.com',
+        'x-rapidapi-key': RAPIDAPI_KEY,
+    }
+    
+    # Use pre-fetched items if available, otherwise fetch
+    if sa_items is not None:
+        items = sa_items
+        print(f"    [SA] Using pre-fetched {len(items)} items for {ticker}")
+    else:
+        print(f"    [SA] Searching transcripts for {ticker}...")
+        try:
+            resp = requests.get(
+                'https://seeking-alpha.p.rapidapi.com/transcripts/v2/list',
+                params={'id': ticker.lower(), 'size': '10'},
+                headers=headers, timeout=20
+            )
+            resp.raise_for_status()
+            items = resp.json().get('data', [])
+        except Exception as e:
+            print(f"    x Transcript list failed: {e}")
+            return None
     
     if not items:
         return None
     
+    # Filter to actual transcripts (not presentations)
+    transcript_items = [
+        item for item in items
+        if 'transcript' in item.get('attributes', {}).get('title', '').lower()
+    ]
+    
     latest = None
-    for item in items:
-        title = item.get('attributes', {}).get('title', '')
-        if 'earnings call transcript' in title.lower():
-            latest = item
-            break
-    if not latest:
-        latest = items[0]
+    
+    if target_quarter:
+        # Priority: find transcript matching target_quarter
+        for item in transcript_items:
+            title = item.get('attributes', {}).get('title', '')
+            qm = re.search(r'Q(\d)\s+(\d{4})', title)
+            if qm and f"Q{qm.group(1)} {qm.group(2)}" == target_quarter:
+                latest = item
+                print(f"    ✓ Found transcript matching target {target_quarter}")
+                break
+        
+        if not latest:
+            # Target quarter transcript not available
+            print(f"    ⚠ No transcript for {target_quarter} on SA yet")
+            
+            # Check: is there an older transcript available?
+            if transcript_items:
+                older = transcript_items[0]
+                older_title = older.get('attributes', {}).get('title', '')
+                older_qm = re.search(r'Q(\d)\s+(\d{4})', older_title)
+                older_q = f"Q{older_qm.group(1)} {older_qm.group(2)}" if older_qm else '?'
+                print(f"    ℹ Latest available transcript is {older_q}: {older_title}")
+                print(f"    ❌ Skipping — would mix {older_q} transcript with {target_quarter} IR data")
+            return None
+    else:
+        # No target quarter specified — fallback to original behavior
+        if transcript_items:
+            latest = transcript_items[0]
+        elif items:
+            latest = items[0]
+        else:
+            return None
     
     attrs = latest.get('attributes', {})
     title = attrs.get('title', '')
@@ -856,7 +1003,7 @@ def generate_earnings_report(quarterly_data, transcript_analysis, company_name, 
             'priceToBook': info.get('priceToBook'),
         }, ensure_ascii=False, default=str)
     except Exception as e:
-        _log(f"    yfinance market data: {e}")
+        print(f"    yfinance market data: {e}")
     
     SYS = f"你是专业买方分析师，正在撰写{company_name} {quarter}季度经营分析报告。不要写开场白。直接输出Markdown。严格使用提供的数据，你必须仔细阅读提供的财报原文和电话会实录，从中提取具体数字填入表格。只有当原文中确实完全没有提及某个指标时，才写\"未披露\"。禁止编造。"
     
@@ -879,9 +1026,11 @@ def generate_earnings_report(quarterly_data, transcript_analysis, company_name, 
     # ═══════════════════════════════════════════════════════
     # EXECUTIVE SUMMARY (before chapters)
     # ═══════════════════════════════════════════════════════
+    # Use compressed transcript analysis (not raw transcript) to keep prompt short
+    transcript_summary_for_exec = (transcript_analysis.get('analysis', '') if transcript_analysis else '') or transcript_for_chapters[:3000]
     exec_summary_prompt = f"""{SYS}
 
-请用一段自然语言（200-300字）概括{company_name} {quarter}本季度最核心的信息。
+请用一段自然语言（250-350字）概括{company_name} {quarter}本季度最核心的信息。
 不要用表格，不要用bullet point，用流畅的段落叙述。直接输出段落文字，不要写标题。
 
 必须覆盖以下维度（按重要性排列）：
@@ -896,14 +1045,14 @@ def generate_earnings_report(quarterly_data, transcript_analysis, company_name, 
 "本季度实现营收¥83.2亿（YoY +8%），Non-GAAP净利润¥8.78亿（YoY +94%），经营利润率改善至6.1%。广告业务增长27%成为核心驱动力，但游戏业务下滑14%。CapEx方面未单独披露。管理层将AI定位为2026年核心战略，计划审慎配置资本投入；未给出具体量化指引。整体基调Confident。"
 
 --- 以下是数据源 ---
-财报/新闻稿原文:
-{fin_data}
+财报/新闻稿摘要:
+{fin_data[:5000]}
 
-电话会实录:
-{transcript_for_chapters}"""
+电话会分析摘要:
+{transcript_summary_for_exec}"""
 
     print(f"    [Report] Executive Summary...")
-    exec_summary = _llm_call(exec_summary_prompt, max_tokens=1500, tag="ExecSummary")
+    exec_summary = _llm_call(exec_summary_prompt, max_tokens=3000, tag="ExecSummary")
     if exec_summary:
         md_sections.append(f"## Executive Summary\n\n{exec_summary.strip()}\n\n---")
     else:
@@ -1008,8 +1157,8 @@ Report Date: {report_date} | LLM: Gemini Multi-model Fallback
     md_path = os.path.join(output_dir, md_fname)
     with open(md_path, 'w', encoding='utf-8') as f:
         f.write(full_md)
-    _log(f"    [Report] Saved MD: {md_fname} ({len(full_md)} chars)")
-    
+    print(f"    [Report] Saved MD: {md_fname} ({len(full_md)} chars)")
+
     # Convert to Word via md_to_word
     docx_fname = f"{ticker}_{qc}_Earnings_Update.docx"
     docx_path = os.path.join(output_dir, docx_fname)
@@ -1021,27 +1170,158 @@ Report Date: {report_date} | LLM: Gemini Multi-model Fallback
             md_to_word = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(md_to_word)
             md_to_word.convert_md_to_word(md_path, docx_path)
-            _log(f"    [Report] Saved DOCX: {docx_fname}")
+            print(f"    [Report] Saved DOCX: {docx_fname}")
         else:
-            _log(f"    [Report] md_to_word.py not found, skipping Word conversion")
+            print(f"    [Report] md_to_word.py not found, skipping Word conversion")
     except Exception as e:
-        _log(f"    [Report] Word conversion failed: {e}")
+        print(f"    [Report] Word conversion failed: {e}")
     
     return docx_path if os.path.exists(docx_path) else md_path
 
 
 # ============================================================
+# Post-report: Supplement Undisclosed Fields via Tavily
+# ============================================================
+def supplement_undisclosed(md_path, ticker, company_name, quarter, output_dir):
+    """
+    After report generation, scan for '未披露' table cells, search Tavily for missing data,
+    patch the MD in-place, and re-convert to Word.
+    Returns True if any patches were applied.
+    """
+    with open(md_path, 'r', encoding='utf-8') as f:
+        md_content = f.read()
+
+    # Find all table rows containing 未披露
+    undisclosed_rows = []  # (line_idx, field_name, original_line)
+    lines = md_content.split('\n')
+
+    for i, line in enumerate(lines):
+        if '未披露' not in line or '|' not in line:
+            continue
+        cells = [c.strip() for c in line.split('|')]
+        cells = [c for c in cells if c]
+        if cells:
+            undisclosed_rows.append((i, cells[0], line))
+
+    if not undisclosed_rows:
+        print(f"  [Supplement] ✓ No undisclosed fields — report complete!")
+        return False
+
+    print(f"\n  [Supplement] Found {len(undisclosed_rows)} undisclosed field(s):")
+    for _, field, _ in undisclosed_rows[:12]:
+        print(f"    - {field}")
+
+    if not TAVILY_API_KEY:
+        print(f"  [Supplement] No TAVILY_API_KEY, skipping auto-supplement")
+        return False
+
+    # Batch search: one Tavily query per field (max 10 fields)
+    cn_name = _ADR_TO_CN.get(ticker, company_name)
+    search_data = {}  # field_name → search_content
+
+    for _, field, _ in undisclosed_rows[:10]:
+        query_str = f'"{cn_name}" OR "{ticker}" {quarter} {field} earnings results'
+        try:
+            resp = requests.post(
+                'https://api.tavily.com/search',
+                json={'api_key': TAVILY_API_KEY, 'query': query_str,
+                      'max_results': 3, 'search_depth': 'basic'},
+                timeout=15
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            content = data.get('answer', '') or ''
+            for r in data.get('results', [])[:2]:
+                content += f"\n{r.get('content', '')[:400]}"
+            if content.strip():
+                search_data[field] = content[:800]
+        except Exception as e:
+            print(f"    [Supplement] Search failed for '{field}': {e}")
+
+    if not search_data:
+        print(f"  [Supplement] Search returned no useful data")
+        return False
+
+    # LLM: extract specific values from search results (single batch call)
+    fields_list = '\n'.join([f"- {f}" for f in search_data.keys()])
+    search_text = '\n\n'.join([f"[{f}]\n{v}" for f, v in search_data.items()])
+
+    extract_prompt = f"""从以下搜索结果中，为{company_name} {quarter}的各财务指标提取具体数值。
+
+需要提取的指标：
+{fields_list}
+
+搜索结果：
+{search_text[:8000]}
+
+请输出JSON，格式：{{"指标名": "具体数值（如¥194.4B、+12.3%、2.3亿）", ...}}
+
+规则：
+- 只输出找到的具体数值，确实找不到就写"未找到"
+- 数值要简洁（如"¥194.4B"而非长句子）
+- 必须确认数值来自{company_name}，不是其他公司的数据
+- 只输出JSON，不要任何其他文字"""
+
+    extracted = _llm_json(extract_prompt, tag="SupplementExtract")
+    if not extracted:
+        print(f"  [Supplement] LLM extraction failed")
+        return False
+
+    # Apply patches to MD lines in-place
+    patches_applied = 0
+    for i, field, original_line in undisclosed_rows:
+        value = str(extracted.get(field, '')).strip()
+        if not value or value in ('未找到', '未披露', 'null', 'None', '-', ''):
+            continue
+        new_line = original_line.replace('未披露', value, 1)
+        if new_line != original_line:
+            lines[i] = new_line
+            patches_applied += 1
+            print(f"    ✓ {field}: → {value}")
+
+    if patches_applied == 0:
+        print(f"  [Supplement] No patches applied (values not found or confirmed)")
+        return False
+
+    # Save patched MD
+    patched_md = '\n'.join(lines)
+    with open(md_path, 'w', encoding='utf-8') as f:
+        f.write(patched_md)
+    print(f"  [Supplement] Patched MD saved ({patches_applied} fields updated)")
+
+    # Re-convert to Word
+    docx_path = md_path.replace('.md', '.docx')
+    try:
+        md_to_word_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'md_to_word.py')
+        if os.path.exists(md_to_word_path):
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("md_to_word", md_to_word_path)
+            md_to_word_mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(md_to_word_mod)
+            md_to_word_mod.convert_md_to_word(md_path, docx_path)
+            print(f"  [Supplement] Re-converted to Word: {os.path.basename(docx_path)}")
+    except Exception as e:
+        print(f"  [Supplement] Word re-conversion failed: {e}")
+
+    return True
+
+
+# ============================================================
 # Main Pipeline
 # ============================================================
-def run_earnings_pipeline(companies, query="", output_dir=None):
+def run_earnings_pipeline(companies, query="", output_dir=None, transcript_file=None, press_release_file=None, override_quarter=None):
     if not output_dir:
         output_dir = os.path.join(SCRIPT_DIR, "..", "data", "earnings_results")
     os.makedirs(output_dir, exist_ok=True)
-    
+
     print("=" * 60)
     print("QUARTERLY EARNINGS ANALYSIS")
     print(f"  Companies: {companies}")
     print(f"  LLM Chain: {' > '.join(MODEL_CHAIN)}")
+    if transcript_file:
+        print(f"  Manual transcript: {transcript_file}")
+    if press_release_file:
+        print(f"  Manual press release: {press_release_file}")
     print("=" * 60)
     
     for name in companies:
@@ -1057,21 +1337,87 @@ def run_earnings_pipeline(companies, query="", output_dir=None):
         ticker = sa_ticker  # Use resolved ticker throughout
         print(f"  Ticker: {ticker} (detect: {detect_ticker}, currency: {reporting_currency})")
         
-        # Step 1
+        # Step 0: Quarter Discovery
+        print(f"\n  [0/4] Quarter Discovery...")
+        target_quarter, sa_has_transcript, sa_items = discover_latest_quarter(sa_ticker, name)
+
+        # Override quarter if user specified (prevents SA mislabeling)
+        if override_quarter:
+            if target_quarter and target_quarter != override_quarter:
+                print(f"  [Step 0] Quarter override: SA={target_quarter} → user={override_quarter}")
+            else:
+                print(f"  [Step 0] Quarter override: {override_quarter}")
+            target_quarter = override_quarter
+            sa_has_transcript = False  # Re-check SA for overridden quarter
+
+        print(f"  [Step 0] Target quarter: {target_quarter}, SA transcript: {'yes' if sa_has_transcript else 'no'}")
+
+        # Step 1: Fetch Transcript
         print(f"\n  [1/4] Transcript...")
-        transcript = fetch_transcript(sa_ticker)
+        transcript = None
         
-        # Transcript freshness check: warn if transcript seems outdated
-        if transcript:
-            t_date = transcript.get('date', '')
-            if t_date:
+        # Priority A: User-provided transcript file
+        if transcript_file and os.path.exists(transcript_file):
+            with open(transcript_file, 'r', encoding='utf-8') as f:
+                content = f.read()
+            transcript = {
+                'title': f'{name} {target_quarter} Earnings Call (user-provided)',
+                'date': datetime.now().strftime('%Y-%m-%d'),
+                'quarter': target_quarter,
+                'content': content,
+            }
+            print(f"  ✓ Using user-provided transcript ({len(content):,} chars)")
+        
+        # Priority B: SA API (target quarter only)
+        if not transcript:
+            transcript = fetch_transcript(sa_ticker, target_quarter=target_quarter, sa_items=sa_items)
+        
+        # Priority C: Tavily search for transcript (when SA doesn't have it yet)
+        if not transcript and target_quarter and TAVILY_API_KEY:
+            print(f"  [1/4] Tavily fallback: searching for {target_quarter} transcript...")
+            cn_name = _ADR_TO_CN.get(ticker, name)
+            queries = [
+                f'{name} {ticker} {target_quarter} earnings call transcript full text',
+                f'{cn_name} {target_quarter} 业绩电话会议 实录 全文',
+            ]
+            tavily_texts = []
+            for q in queries:
                 try:
-                    t_age_days = (datetime.now() - datetime.strptime(t_date, '%Y-%m-%d')).days
-                    if t_age_days > 120:
-                        print(f"  ⚠️  Transcript is {t_age_days} days old ({t_date}). A newer quarter may exist but is not yet on Seeking Alpha.")
-                        print(f"      Will supplement with Tavily search for latest data.")
-                except ValueError:
-                    pass
+                    tavily_resp = requests.post(
+                        'https://api.tavily.com/search',
+                        json={'api_key': TAVILY_API_KEY, 'query': q,
+                              'max_results': 3, 'search_depth': 'advanced'},
+                        timeout=20
+                    )
+                    tavily_resp.raise_for_status()
+                    for r in tavily_resp.json().get('results', []):
+                        content = r.get('content', '')
+                        title = r.get('title', '')
+                        # Company-aware filter: skip results that don't mention the target company
+                        company_terms = [t for t in [ticker, name, cn_name] if len(t) > 2]
+                        combined_text = (content + ' ' + title).lower()
+                        if not any(t.lower() in combined_text for t in company_terms):
+                            print(f"    [Transcript] Skip unrelated: {title[:60]}")
+                            continue
+                        if len(content) > 500:
+                            tavily_texts.append(content)
+                except Exception as e:
+                    print(f"    Tavily query failed: {e}")
+            
+            if tavily_texts:
+                combined = '\n\n---\n\n'.join(tavily_texts)
+                transcript = {
+                    'title': f'{name} {target_quarter} Earnings Call (Tavily search)',
+                    'date': datetime.now().strftime('%Y-%m-%d'),
+                    'quarter': target_quarter,
+                    'content': combined,
+                }
+                print(f"  ✓ Tavily found transcript content ({len(combined):,} chars from {len(tavily_texts)} sources)")
+            else:
+                print(f"  ⚠ Tavily also found no transcript for {target_quarter}")
+        
+        if not transcript and target_quarter:
+            print(f"  ℹ No transcript for {target_quarter}. Report will rely on IR press release / PDF data.")
         
         # Step 2
         ta = None
@@ -1079,11 +1425,24 @@ def run_earnings_pipeline(companies, query="", output_dir=None):
             print(f"\n  [2/4] Transcript Analysis...")
             ta = analyze_transcript(transcript, name)
         
-        quarter = transcript.get('quarter', '') if transcript else ''
+        # Use target quarter as the report quarter (not transcript quarter)
+        # This prevents mixing: e.g. Q3 transcript + Q4 IR PDF
+        quarter = target_quarter or (transcript.get('quarter', '') if transcript else '')
         
         # Step 3
         print(f"\n  [3/4] Financial Data (Press Release)...")
-        qd = collect_quarterly_data(name, ticker, quarter)
+        # Priority A: User-provided press release file
+        if press_release_file and os.path.exists(press_release_file):
+            with open(press_release_file, 'r', encoding='utf-8') as f:
+                pr_content = f.read()
+            print(f"  ✓ Using user-provided press release ({len(pr_content):,} chars)")
+            qd = collect_quarterly_data(name, ticker, quarter)
+            if qd:
+                qd['raw_pr_content'] = pr_content
+            else:
+                qd = {'data': {}, 'raw_pr_content': pr_content, 'metadata': {'source': 'user_press_release'}}
+        else:
+            qd = collect_quarterly_data(name, ticker, quarter)
         if qd and qd.get('data'):
             print(f"  Data source: {qd.get('metadata', {}).get('source', '?')}")
         
@@ -1104,6 +1463,10 @@ def run_earnings_pipeline(companies, query="", output_dir=None):
             path = generate_earnings_report(qd, ta, name, ticker, output_dir)
             print(f"\n  DONE: {path}")
             print(f"  Size: {os.path.getsize(path):,} bytes")
+            # Post-generation: supplement any '未披露' fields via Tavily search
+            md_path = path.replace('.docx', '.md') if path.endswith('.docx') else path
+            if os.path.exists(md_path):
+                supplement_undisclosed(md_path, ticker, name, quarter, output_dir)
         except Exception as e:
             print(f"  FAILED: {e}")
             import traceback; traceback.print_exc()
@@ -1124,6 +1487,15 @@ if __name__ == '__main__':
     parser.add_argument('--ticker', '-t', required=True)
     parser.add_argument('--query', '-q', default='')
     parser.add_argument('--output', '-o', default=None)
+    parser.add_argument('--quarter', default=None,
+                        help='强制指定目标季度，如 "Q4 2025"（覆盖SA自动发现，解决季度标注错误问题）')
+    parser.add_argument('--transcript-file', default=None,
+                        help='手动提供 transcript 文件路径（txt/md），跳过 SA 获取')
+    parser.add_argument('--press-release-file', default=None,
+                        help='手动提供业绩新闻稿文件路径（txt），跳过 IR 抓取')
     args = parser.parse_args()
     output_dir = args.output or os.path.join('D:\\clauderesult', f'claude{datetime.now().strftime("%m%d")}', f'earnings_{args.ticker.lower()}')
-    run_earnings_pipeline([args.ticker], args.query, output_dir)
+    run_earnings_pipeline([args.ticker], args.query, output_dir,
+                          transcript_file=args.transcript_file,
+                          press_release_file=args.press_release_file,
+                          override_quarter=args.quarter)

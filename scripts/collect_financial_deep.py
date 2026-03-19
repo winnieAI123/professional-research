@@ -1298,22 +1298,22 @@ def _set_cell_font(cell, size=None, cn_font='SimSun', en_font='Arial'):
 
 
 def generate_word_report(company_results: dict, query: str, years: int, output_dir: str) -> str:
-    """Generate Word report with analysis + data tables."""
+    """Generate Word report with pure data tables. Zero LLM calls."""
     from docx import Document
-    from docx.shared import Pt, Cm, RGBColor
+    from docx.shared import Pt, RGBColor
     from docx.enum.text import WD_ALIGN_PARAGRAPH
     from docx.oxml.ns import qn
     
     doc = Document()
     
-    # Style: 中文宋体, 英文Arial
+    # Style
     style = doc.styles['Normal']
     style.font.name = 'Arial'
     style.font.size = Pt(10.5)
     style.element.rPr.rFonts.set(qn('w:eastAsia'), 'SimSun')
     
     # Title
-    title = doc.add_heading(f'财务数据提取报告', level=0)
+    title = doc.add_heading('财务数据提取报告', level=0)
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
     for run in title.runs:
         run.font.name = 'Arial'
@@ -1323,437 +1323,63 @@ def generate_word_report(company_results: dict, query: str, years: int, output_d
     doc.add_paragraph(f'时间范围: 近{years}年')
     doc.add_paragraph(f'生成日期: {datetime.now().strftime("%Y-%m-%d")}')
     doc.add_paragraph(f'公司: {", ".join(company_results.keys())}')
+    doc.add_paragraph()
     
     # ================================================================
-    # Part 0: Direct Answer Tables — 直接回答用户问题
-    # Parse query into dimensions, then create cross-company tables
+    # Part 1: Annual Data Tables (per company)
     # ================================================================
-    
-    # Step 1: Parse user query into analysis dimensions
-    all_company_data = {
-        name: json.dumps(r.get("data", {}), ensure_ascii=False, default=str)[:5000]
-        for name, r in company_results.items() if r and r.get("data")
-    }
-    
-    if all_company_data:
-        dimension_prompt = f"""用户问题: "{query}"
-涉及公司: {list(all_company_data.keys())}
-
-各公司可用的指标名:
-{json.dumps({name: list(set(
-    metric_name 
-    for group in (company_results[name] or {}).get("data", {}).values()
-    for metric_name in group.keys() 
-    if isinstance(group.get(metric_name), dict)
-)) for name in all_company_data}, ensure_ascii=False)}
-
-任务: 根据用户问题，拆解为具体的对比维度，每个维度选择各公司中最匹配的指标。
-
-输出严格JSON格式:
-{{
-  "dimensions": [
-    {{
-      "title": "维度名（如：收入对比）",
-      "unit": "单位（如：千元RMB、亿元）",
-      "rows": [
-        {{"label": "公司-指标名", "company": "公司名", "metric_path": ["组名", "指标名"]}}
-      ]
-    }}
-  ]
-}}
-
-规则:
-- 每个维度精选最核心的3-8行，不要堆太多
-- 维度拆分跟随用户问题的关键词（如"收入"=一个维度，"利润"=一个维度，"余额"=一个维度）
-- label 用中文简称，如"微众-营业收入"、"360-信贷驱动服务收入"
-- metric_path 必须精确匹配数据中真实存在的组名和指标名
-- 如果某公司没有该维度的数据，就不放它
-"""
-        
-        dim_result = generate_content(prompt=dimension_prompt, max_output_tokens=3000)
-        
-        if dim_result:
-            try:
-                dim_cleaned = dim_result.strip().strip('```json').strip('```').strip()
-                dim_data = json.loads(dim_cleaned)
-                dimensions = dim_data.get("dimensions", [])
-                
-                if dimensions:
-                    doc.add_heading('问题直答', level=1)
-                    p = doc.add_paragraph(f'以下表格直接回答: "{query}"')
-                    p.runs[0].font.size = Pt(9)
-                    p.runs[0].font.color.rgb = RGBColor(100, 100, 100)
-                    
-                    for dim in dimensions:
-                        dim_title = dim.get("title", "")
-                        dim_unit = dim.get("unit", "")
-                        rows = dim.get("rows", [])
-                        
-                        if not rows:
-                            continue
-                        
-                        # Table title
-                        title_text = f'{dim_title}（{dim_unit}）' if dim_unit else dim_title
-                        p = doc.add_paragraph()
-                        run = p.add_run(title_text)
-                        run.bold = True
-                        run.font.size = Pt(10.5)
-                        run.font.name = 'Arial'
-                        run.element.rPr.rFonts.set(qn('w:eastAsia'), 'SimSun')
-                        
-                        # Collect all years across all rows in this dimension
-                        dim_years = set()
-                        row_values = []
-                        for r_spec in rows:
-                            company_name = r_spec.get("company", "")
-                            metric_path = r_spec.get("metric_path", [])
-                            label = r_spec.get("label", "")
-                            
-                            # Navigate data to find values
-                            result = company_results.get(company_name)
-                            if not result or not result.get("data"):
-                                continue
-                            
-                            data = result["data"]
-                            values = {}
-                            if len(metric_path) == 2:
-                                group = data.get(metric_path[0], {})
-                                metric_data = group.get(metric_path[1], {})
-                                if isinstance(metric_data, dict):
-                                    values = {k: v for k, v in metric_data.items() if re.match(r'^\d{4}$', str(k))}
-                            elif len(metric_path) == 1:
-                                # Try finding in any group
-                                for group in data.values():
-                                    if metric_path[0] in group:
-                                        metric_data = group[metric_path[0]]
-                                        if isinstance(metric_data, dict):
-                                            values = {k: v for k, v in metric_data.items() if re.match(r'^\d{4}$', str(k))}
-                                            break
-                            
-                            if values:
-                                dim_years.update(values.keys())
-                                row_values.append({"label": label, "values": values})
-                        
-                        if not row_values or not dim_years:
-                            continue
-                        
-                        sorted_years = sorted(dim_years)
-                        
-                        # Build Word table
-                        headers = ['指标'] + sorted_years
-                        table = doc.add_table(rows=1, cols=len(headers))
-                        table.style = 'Table Grid'
-                        
-                        for i, h_text in enumerate(headers):
-                            cell = table.rows[0].cells[i]
-                            cell.text = h_text
-                            _set_cell_font(cell, size=Pt(9))
-                            cell.paragraphs[0].runs[0].bold = True
-                        
-                        for rv in row_values:
-                            row = table.add_row()
-                            row.cells[0].text = rv["label"]
-                            _set_cell_font(row.cells[0], size=Pt(9))
-                            for i, y in enumerate(sorted_years, 1):
-                                val = rv["values"].get(y, "-")
-                                row.cells[i].text = _format_number(val) if val != "-" else "-"
-                                _set_cell_font(row.cells[i], size=Pt(9))
-                        
-                        doc.add_paragraph()  # spacing
-                    
-                    doc.add_paragraph('─' * 50)
-                    
-            except (json.JSONDecodeError, KeyError) as e:
-                print(f"  ⚠ Direct answer tables failed: {e}")
-    
-    # Part 1: Executive Summary — Claude Code style
-    # Per-company: core narrative + key tables + bullet points
-    # Then: cross-company comparison + research summary
-    doc.add_heading('报告核心发现', level=1)
-    
-    company_summaries = {}  # Store for cross-company comparison later
-    
-    for company_name, result in company_results.items():
-        if not result or not result.get("data"):
-            doc.add_heading(company_name, level=2)
-            doc.add_paragraph('未获取到有效数据。')
-            continue
-        
-        # Collect metadata
-        all_years = set()
-        for group in result["data"].values():
-            for metric_data in group.values():
-                if isinstance(metric_data, dict):
-                    all_years.update(k for k in metric_data.keys() if re.match(r'^\d{4}$', str(k)))
-        
-        source = result.get("metadata", {}).get("source", "unknown")
-        year_range = f"{min(all_years)}-{max(all_years)}" if all_years else "N/A"
-        
-        # Ask LLM to generate structured executive summary
-        company_data_json = json.dumps(result.get("data", {}), ensure_ascii=False, indent=2, default=str)[:15000]
-        
-        exec_prompt = f"""你是资深金融分析师。根据以下数据，为{company_name}生成一个结构化的核心发现摘要。
-
-用户问题: {query}
-公司: {company_name}
-数据来源: {source}
-
-请严格输出以下JSON格式（不要输出其他内容）:
-{{
-  "tag": "一句话描述公司属性，如：非上市，数据透明度有限",
-  "narrative": "一句话核心叙事，包含关键数字和趋势，如：五年营收翻番但2024年首次下滑",
-  "key_tables": [
-    {{
-      "title": "表格标题，如：营收与净利（亿元）",
-      "metrics": [
-        {{"name": "指标名", "values": {{"2020": "198.8", "2021": "269.9", "2022": "353.6", "2023": "393.6", "2024": "381.3"}}}},
-        {{"name": "增速", "values": {{"2020": "+33.7%", "2021": "+35.8%", "2022": "+31.0%", "2023": "+11.3%", "2024": "-3.1%"}}}}
-      ]
-    }}
-  ],
-  "bullets": [
-    "要点1：包含具体数字",
-    "要点2：包含具体数字",
-    "要点3：包含具体数字"
-  ],
-  "comparison_row": {{
-    "净利润": "xxx亿元",
-    "主要资产/贷款余额": "xxx亿",
-    "净利润率": "xx%",
-    "核心产品": "产品名",
-    "最新年成长性": "+xx%"
-  }}
-}}
-
-规则:
-- key_tables 精选2-3张最关键的表（如营收利润表、分产品余额表），不要堆所有数据
-- 数字需从数据中提取，单位转换为亿元（如千元数据÷100000）
-- values 中的数字加千分符，增速用百分比
-- bullets 3-4条，每条含具体数字
-- 不编造数据中没有的数字
-
-数据:
-{company_data_json}"""
-
-        exec_result = generate_content(prompt=exec_prompt, max_output_tokens=4000)
-        
-        if not exec_result:
-            doc.add_heading(company_name, level=2)
-            doc.add_paragraph(f'数据来源: {source} | 覆盖: {year_range}')
-            continue
-        
-        # Parse LLM output
-        try:
-            cleaned = exec_result.strip().strip('```json').strip('```').strip()
-            summary = json.loads(cleaned)
-        except json.JSONDecodeError:
-            # Fallback: just show the text
-            doc.add_heading(company_name, level=2)
-            p = doc.add_paragraph(exec_result.replace('**', '').strip()[:500])
-            for run in p.runs:
-                run.font.size = Pt(10.5)
-            continue
-        
-        company_summaries[company_name] = summary
-        
-        # --- Render to Word ---
-        # Company heading with tag
-        tag = summary.get("tag", "")
-        heading_text = f"{company_name}（{tag}）" if tag else company_name
-        h = doc.add_heading(heading_text, level=2)
-        for run in h.runs:
-            run.font.name = 'Arial'
-            run.element.rPr.rFonts.set(qn('w:eastAsia'), 'SimSun')
-        
-        # Core narrative
-        narrative = summary.get("narrative", "")
-        if narrative:
-            p = doc.add_paragraph()
-            run = p.add_run(f"核心叙事：")
-            run.bold = True
-            run.font.size = Pt(10.5)
-            run.font.name = 'Arial'
-            run.element.rPr.rFonts.set(qn('w:eastAsia'), 'SimSun')
-            run = p.add_run(f" {narrative}")
-            run.font.size = Pt(10.5)
-            run.font.name = 'Arial'
-            run.element.rPr.rFonts.set(qn('w:eastAsia'), 'SimSun')
-        
-        # Key tables
-        for tbl_spec in summary.get("key_tables", []):
-            tbl_title = tbl_spec.get("title", "")
-            metrics = tbl_spec.get("metrics", [])
-            if not metrics:
-                continue
-            
-            # Table title
-            p = doc.add_paragraph()
-            run = p.add_run(tbl_title)
-            run.bold = True
-            run.font.size = Pt(10)
-            run.font.name = 'Arial'
-            run.element.rPr.rFonts.set(qn('w:eastAsia'), 'SimSun')
-            
-            # Collect all years from metrics
-            tbl_years = sorted(set(
-                y for m in metrics for y in m.get("values", {}).keys()
-                if re.match(r'^\d{4}', str(y))
-            ))
-            
-            if not tbl_years:
-                continue
-            
-            # Create Word table
-            headers = ['项目'] + tbl_years
-            table = doc.add_table(rows=1, cols=len(headers))
-            table.style = 'Table Grid'
-            
-            # Header row
-            for i, h_text in enumerate(headers):
-                cell = table.rows[0].cells[i]
-                cell.text = h_text
-                _set_cell_font(cell, size=Pt(9))
-                cell.paragraphs[0].runs[0].bold = True
-            
-            # Data rows
-            for m in metrics:
-                row = table.add_row()
-                row.cells[0].text = m.get("name", "")
-                _set_cell_font(row.cells[0], size=Pt(9))
-                for i, y in enumerate(tbl_years, 1):
-                    val = m.get("values", {}).get(y, "-")
-                    row.cells[i].text = str(val)
-                    _set_cell_font(row.cells[i], size=Pt(9))
-            
-            doc.add_paragraph()  # spacing
-        
-        # Bullet points
-        bullets = summary.get("bullets", [])
-        for bullet in bullets:
-            p = doc.add_paragraph(bullet, style='List Bullet')
-            for run in p.runs:
-                run.font.size = Pt(10)
-                run.font.name = 'Arial'
-                run.element.rPr.rFonts.set(qn('w:eastAsia'), 'SimSun')
-        
-        # Source tag (small gray)
-        p = doc.add_paragraph(f'数据来源: {source} | 覆盖: {year_range}')
-        for run in p.runs:
-            run.font.size = Pt(8)
-            run.font.color.rgb = RGBColor(128, 128, 128)
-        
-        # Separator line
-        doc.add_paragraph('─' * 50)
-    
-    # --- Cross-company Comparison Table ---
-    if len(company_summaries) >= 2:
-        doc.add_heading('横向对比（最新年度）', level=2)
-        
-        # Collect comparison dimensions from all companies
-        all_dims = set()
-        for s in company_summaries.values():
-            all_dims.update(s.get("comparison_row", {}).keys())
-        dims = sorted(all_dims)
-        
-        if dims:
-            headers = ['维度'] + list(company_summaries.keys())
-            table = doc.add_table(rows=1, cols=len(headers))
-            table.style = 'Table Grid'
-            
-            for i, h_text in enumerate(headers):
-                cell = table.rows[0].cells[i]
-                cell.text = h_text
-                _set_cell_font(cell, size=Pt(9))
-                cell.paragraphs[0].runs[0].bold = True
-            
-            for dim in dims:
-                row = table.add_row()
-                row.cells[0].text = dim
-                _set_cell_font(row.cells[0], size=Pt(9))
-                row.cells[0].paragraphs[0].runs[0].bold = True
-                for i, (comp_name, s) in enumerate(company_summaries.items(), 1):
-                    val = s.get("comparison_row", {}).get(dim, "-")
-                    row.cells[i].text = str(val)
-                    _set_cell_font(row.cells[i], size=Pt(9))
-        
-        doc.add_paragraph()
-    
-    # --- Research Summary ---
-    if len(company_summaries) >= 2:
-        doc.add_heading('研究总结', level=2)
-        
-        all_data_brief = json.dumps(
-            {name: s.get("comparison_row", {}) for name, s in company_summaries.items()},
-            ensure_ascii=False
-        )
-        narratives = {name: s.get("narrative", "") for name, s in company_summaries.items()}
-        
-        summary_prompt = (
-            f"根据以下各公司核心数据，写一段研究总结（200-300字）。\n"
-            f"格式：先一句总括性描述，然后每家公司用一行加粗公司名 + 破折号 + 一句话定位，"
-            f"下面3个要点用破折号开头。只陈述事实和数字，不加主观评价。不用Markdown。\n\n"
-            f"公司核心叙事: {json.dumps(narratives, ensure_ascii=False)}\n"
-            f"对比数据: {all_data_brief}"
-        )
-        
-        research_summary = generate_content(prompt=summary_prompt, max_output_tokens=1500)
-        if research_summary:
-            research_summary = research_summary.replace('**', '').replace('##', '').strip()
-            for line in research_summary.split('\n'):
-                line = line.strip()
-                if not line:
-                    continue
-                p = doc.add_paragraph(line)
-                for run in p.runs:
-                    run.font.size = Pt(10.5)
-                    run.font.name = 'Arial'
-                    run.element.rPr.rFonts.set(qn('w:eastAsia'), 'SimSun')
-    
-    # Part 2: Data Appendix Tables (Annual)
-    doc.add_heading('二、详细年度数据附录', level=1)
+    doc.add_heading('一、年度数据', level=1)
     
     appendix_letter = ord('A')
     has_quarterly = False
     
     for company_name, result in company_results.items():
         if not result or not result.get("data"):
+            doc.add_heading(f'{chr(appendix_letter)}. {company_name}', level=2)
+            doc.add_paragraph('未获取到有效数据。')
+            appendix_letter += 1
             continue
         
-        # Split data into annual and quarterly groups
+        # Split annual vs quarterly
         annual_groups = {k: v for k, v in result["data"].items() if not k.startswith("[季度]")}
         quarterly_groups = {k: v for k, v in result["data"].items() if k.startswith("[季度]")}
-        
         if quarterly_groups:
             has_quarterly = True
         
         if not annual_groups:
+            appendix_letter += 1
             continue
         
-        doc.add_heading(f'附录{chr(appendix_letter)}: {company_name}', level=2)
+        # Company heading with source tag
+        source = result.get("metadata", {}).get("source", "unknown")
+        unit = result.get("metadata", {}).get("unit", "")
+        source_short = source.split(':')[0].replace('sec_edgar', 'SEC').replace('cn_listed', '东财').replace('pdf_search', 'PDF年报').replace('web_search', 'Web')
+        
+        heading_text = f'{chr(appendix_letter)}. {company_name}（{source_short}）'
+        doc.add_heading(heading_text, level=2)
         appendix_letter += 1
         
-        unit = result.get("metadata", {}).get("unit", "")
         if unit:
             p = doc.add_paragraph(f'单位: {unit}')
-            p.runs[0].bold = True
+            for run in p.runs:
+                run.font.size = Pt(9)
+                run.font.color.rgb = RGBColor(100, 100, 100)
         
         for group_name, metrics in annual_groups.items():
-            # Show unit in section heading
-            heading_text = f'{group_name}（单位: {unit}）' if unit else group_name
-            doc.add_heading(heading_text, level=3)
+            doc.add_heading(group_name, level=3)
             
-            # Collect all years from leaf-level data only (4-digit year keys)
+            # Collect all 4-digit year keys
             all_years = sorted(set(
                 str(y) for m in metrics.values()
                 if isinstance(m, dict)
                 for y in m.keys()
                 if re.match(r'^\d{4}$', str(y))
-            ), reverse=True)
+            ))
             
             if not all_years:
                 continue
             
-            # Create table
+            # Build table
             headers = ['指标'] + all_years
             table = doc.add_table(rows=1, cols=len(headers))
             table.style = 'Table Grid'
@@ -1761,11 +1387,8 @@ def generate_word_report(company_results: dict, query: str, years: int, output_d
             for i, h in enumerate(headers):
                 cell = table.rows[0].cells[i]
                 cell.text = h
-                run = cell.paragraphs[0].runs[0]
-                run.bold = True
-                run.font.size = Pt(9)
-                run.font.name = 'Arial'
-                run.element.rPr.rFonts.set(qn('w:eastAsia'), 'SimSun')
+                _set_cell_font(cell, size=Pt(9))
+                cell.paragraphs[0].runs[0].bold = True
             
             for metric_name, years_data in metrics.items():
                 if not isinstance(years_data, dict):
@@ -1780,15 +1403,16 @@ def generate_word_report(company_results: dict, query: str, years: int, output_d
                 
                 for i, year in enumerate(all_years, 1):
                     val = years_data.get(year, years_data.get(int(year) if year.isdigit() else year, ""))
-                    cell = row.cells[i]
-                    cell.text = _flatten_value(val)
-                    _set_cell_font(cell)
+                    row.cells[i].text = _flatten_value(val)
+                    _set_cell_font(row.cells[i])
             
             doc.add_paragraph()  # spacing
     
-    # Part 2b: Quarterly Data (if available)
+    # ================================================================
+    # Part 2: Quarterly Data (if available)
+    # ================================================================
     if has_quarterly:
-        doc.add_heading('三、最新季度数据', level=1)
+        doc.add_heading('二、最近季度数据', level=1)
         
         for company_name, result in company_results.items():
             if not result or not result.get("data"):
@@ -1798,20 +1422,18 @@ def generate_word_report(company_results: dict, query: str, years: int, output_d
             if not quarterly_groups:
                 continue
             
-            doc.add_heading(f'{company_name} — 季度数据', level=2)
+            doc.add_heading(f'{company_name}', level=2)
             
             for group_name, metrics in quarterly_groups.items():
-                # Remove [季度] prefix for display
                 display_name = group_name.replace("[季度] ", "").replace("[季度]", "")
                 doc.add_heading(display_name, level=3)
                 
-                # Collect all quarter keys (YYYY-QN format)
                 all_periods = sorted(set(
                     str(p) for m in metrics.values()
                     if isinstance(m, dict)
                     for p in m.keys()
                     if re.match(r'^\d{4}-Q\d$', str(p))
-                ), reverse=True)
+                ))
                 
                 if not all_periods:
                     continue
@@ -1823,11 +1445,8 @@ def generate_word_report(company_results: dict, query: str, years: int, output_d
                 for i, h in enumerate(headers):
                     cell = table.rows[0].cells[i]
                     cell.text = h
-                    run = cell.paragraphs[0].runs[0]
-                    run.bold = True
-                    run.font.size = Pt(9)
-                    run.font.name = 'Arial'
-                    run.element.rPr.rFonts.set(qn('w:eastAsia'), 'SimSun')
+                    _set_cell_font(cell, size=Pt(9))
+                    cell.paragraphs[0].runs[0].bold = True
                 
                 for metric_name, periods_data in metrics.items():
                     if not isinstance(periods_data, dict):
@@ -1842,72 +1461,53 @@ def generate_word_report(company_results: dict, query: str, years: int, output_d
                     
                     for i, period in enumerate(all_periods, 1):
                         val = periods_data.get(period, "")
-                        cell = row.cells[i]
-                        cell.text = _flatten_value(val)
-                        _set_cell_font(cell)
+                        row.cells[i].text = _flatten_value(val)
+                        _set_cell_font(row.cells[i])
                 
-                doc.add_paragraph()  # spacing
+                doc.add_paragraph()
     
+    # ================================================================
     # Part 3: Data Source Description
-    # Part N: Data Source Description (numbering depends on whether quarterly exists)
-    source_part = '四' if has_quarterly else '三'
-    doc.add_heading(f'{source_part}、数据来源说明', level=1)
+    # ================================================================
+    source_part = '三' if has_quarterly else '二'
+    doc.add_heading(f'{source_part}、数据来源', level=1)
     
     source_descriptions = {
-        'sec_edgar': 'SEC EDGAR 美国证券交易委员会电子数据库（年报 20-F/10-K 表格提取）',
-        'cn_listed': '东方财富 East Money F10 财务数据接口',
-        'pdf_search': '年度报告 PDF（经 Tavily 搜索发现并下载，由 LLM 提取结构化数据）',
-        'web_search': '公开网络信息（经 Tavily 搜索聚合，由 LLM 提取结构化数据）',
+        'sec_edgar': 'SEC EDGAR（20-F/10-K 表格提取）',
+        'cn_listed': '东方财富 F10',
+        'pdf_search': '年报 PDF（Tavily 搜索 + LLM 提取）',
+        'web_search': '公开网络信息（Tavily 搜索 + LLM 提取）',
     }
     
     for company_name, result in company_results.items():
         if not result:
             continue
-        
         metadata = result.get('metadata', {})
         source_type = metadata.get('source', '').split(':')[0] if metadata.get('source') else ''
         source_desc = source_descriptions.get(source_type, '未知来源')
         unit = metadata.get('unit', '')
-        notes = metadata.get('notes', '')
         reliability = metadata.get('reliability', '')
+        web_supp = metadata.get('web_supplemented_years', [])
         
-        p = doc.add_paragraph()
-        run = p.add_run(f'{company_name}')
-        run.bold = True
-        run.font.size = Pt(10.5)
-        run.font.name = 'Arial'
-        run.element.rPr.rFonts.set(qn('w:eastAsia'), 'SimSun')
-        
-        details = []
-        if source_desc:
-            details.append(f'数据源: {source_desc}')
+        line_parts = [f'{company_name}: {source_desc}']
         if unit:
-            details.append(f'原始单位: {unit}')
+            line_parts.append(f'单位: {unit}')
         if reliability:
-            details.append(f'可靠性: {reliability}')
+            line_parts.append(f'可靠性: {reliability}')
+        if web_supp:
+            line_parts.append(f'Web补充年份: {", ".join(web_supp)}')
         
-        for detail in details:
-            dp = doc.add_paragraph(f'  {detail}')
-            for run in dp.runs:
-                run.font.size = Pt(9)
-                run.font.name = 'Arial'
-                run.element.rPr.rFonts.set(qn('w:eastAsia'), 'SimSun')
-        
-        if notes:
-            np = doc.add_paragraph(f'  备注: {notes[:300]}')
-            for run in np.runs:
-                run.font.size = Pt(8)
-                run.font.name = 'Arial'
-                run.element.rPr.rFonts.set(qn('w:eastAsia'), 'SimSun')
-                run.font.color.rgb = RGBColor(128, 128, 128)
+        p = doc.add_paragraph(' | '.join(line_parts))
+        for run in p.runs:
+            run.font.size = Pt(9)
+            run.font.name = 'Arial'
+            run.element.rPr.rFonts.set(qn('w:eastAsia'), 'SimSun')
     
     # Disclaimer
     doc.add_paragraph()
-    disclaimer = doc.add_paragraph('免责声明: 本报告数据由自动化程序从公开渠道提取，可能存在提取误差，仅供参考。建议对关键数据回溯原始文件进行核实。')
+    disclaimer = doc.add_paragraph('免责声明: 数据由自动化程序从公开渠道提取，可能存在提取误差，仅供参考。')
     for run in disclaimer.runs:
         run.font.size = Pt(8)
-        run.font.name = 'Arial'
-        run.element.rPr.rFonts.set(qn('w:eastAsia'), 'SimSun')
         run.font.color.rgb = RGBColor(128, 128, 128)
     
     # Save
