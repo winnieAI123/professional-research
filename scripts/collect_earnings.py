@@ -80,6 +80,257 @@ def _clean_llm(text):
     return text.strip()
 
 
+
+# ── Per-chapter PR keyword map ──────────────────────────
+# Each chapter only receives relevant PR paragraphs (~6k chars), not the full 30k+
+# This prevents context overflow on fallback models (3.1-pro/3-pro/flash)
+CHAPTER_PR_KEYWORDS = {
+    1: ['revenue', 'net income', 'eps', 'ebita', 'profit', 'loss', 'free cash flow',
+        'operating income', 'non-gaap', 'adjusted'],
+    2: [],    # Thesis — primarily transcript analysis
+    3: ['revenue', 'segment', 'cloud', 'commerce', 'cmr', 'customer management',
+        'international', 'wholesale', 'million', 'billion', 'increased', 'decreased'],
+    4: ['ebita', 'margin', 'expense', 'cost', 'operating', 'r&d', 'research',
+        'sales', 'general', 'administrative', 'share-based'],
+    5: [],    # Strategy — primarily transcript
+    6: ['user', 'mau', 'dau', 'customer', '88vip', 'app', 'active', 'qwen',
+        'monthly', 'member', 'subscriber', 'retention'],
+    7: ['outlook', 'guidance', 'forecast', 'next quarter', 'fiscal year', 'expect',
+        'target', 'growth', 'trend'],
+    8: [],    # Valuation — yfinance only
+}
+
+
+def _extract_chapter_pr(pr_content, chapter_num, max_chars=7000):
+    """Extract chapter-relevant paragraphs from press release to keep prompts small."""
+    if not pr_content:
+        return ''
+    keywords = CHAPTER_PR_KEYWORDS.get(chapter_num, [])
+    if not keywords:
+        return pr_content[:max_chars]
+
+    lines = pr_content.split('\n')
+
+    # Always include the leading financial highlights (usually first ~2500 chars)
+    # This ensures KPI table and summary numbers are present
+    HEADER_CHARS = 2500
+    header = pr_content[:HEADER_CHARS]
+    seen = set(header.split('\n'))
+    relevant_parts = [header]
+    total = len(header)
+
+    for i, line in enumerate(lines):
+        if total >= max_chars:
+            break
+        line_lower = line.lower()
+        if any(k in line_lower for k in keywords):
+            # Include 1 line of context on each side
+            chunk_lines = lines[max(0, i - 1): i + 3]
+            chunk = '\n'.join(chunk_lines)
+            if chunk in seen:
+                continue
+            seen.add(chunk)
+            relevant_parts.append(chunk)
+            total += len(chunk)
+
+    return ('\n'.join(relevant_parts))[:max_chars]
+
+
+def _prior_quarter_label(current_quarter):
+    """
+    Given "Q3 2026" or "Q3 FY2026", return ("Q2 2026", "September quarter 2025").
+    Also returns a human-readable calendar description for search queries.
+    """
+    m = re.search(r'Q(\d)\s*(?:FY)?(\d{4})', current_quarter, re.IGNORECASE)
+    if not m:
+        return None, None
+    q = int(m.group(1))
+    fy = int(m.group(2))
+    if q == 1:
+        pq, pfy = 4, fy - 1
+    else:
+        pq, pfy = q - 1, fy
+
+    prior_label = f"Q{pq} {pfy}"
+
+    # Build calendar quarter description (approximate; enough for search)
+    # Assume standard quarter mapping: Q1=Apr-Jun, Q2=Jul-Sep, Q3=Oct-Dec, Q4=Jan-Mar
+    # For the prior quarter end month/year:
+    # pfy is fiscal year; actual calendar year depends on company convention
+    # We just construct a secondary search phrase
+    QUARTER_MONTHS = {1: 'June', 2: 'September', 3: 'December', 4: 'March'}
+    cal_month = QUARTER_MONTHS.get(pq, '')
+    # Q4 of FY{pfy} ends in March of the *calendar* year = pfy (fiscal year end)
+    # Q1/Q2/Q3 of FY{pfy} end in June/Sep/Dec of pfy-1
+    cal_year = pfy if pq == 4 else pfy - 1
+    cal_desc = f"{cal_month} quarter {cal_year}" if cal_month else ''
+
+    return prior_label, cal_desc
+
+
+def _fetch_prior_quarter_data(ticker, current_quarter, tavily_key, cn_name=''):
+    """
+    Fetch prior quarter key metrics for QoQ calculation.
+
+    Strategy:
+    1. Determine prior quarter label (e.g. Q3 2026 → Q2 2026)
+    2. Search Tavily / businesswire for prior quarter results
+    3. LLM-extract key metrics: revenue, adjusted EBITA, cloud revenue, etc.
+    4. Return dict ready to inject into chapter prompts
+
+    Returns: dict with keys 'quarter', 'metrics' (dict of field→value), or None on failure.
+    """
+    prior_label, cal_desc = _prior_quarter_label(current_quarter)
+    if not prior_label:
+        return None
+
+    print(f"    [QoQ] Fetching prior quarter: {prior_label} ({cal_desc}) for {ticker}...")
+
+    content = ''
+    source_url = ''
+
+    # Attempt 1: Tavily search
+    if tavily_key:
+        try:
+            queries = [
+                f'site:businesswire.com "{ticker}" "{cal_desc}" earnings results',
+                f'"{ticker}" "{prior_label}" earnings revenue results financial highlights',
+            ]
+            for query in queries:
+                resp = requests.post(
+                    'https://api.tavily.com/search',
+                    json={'api_key': tavily_key, 'query': query, 'max_results': 3,
+                          'include_answer': True, 'search_depth': 'basic'},
+                    timeout=25
+                )
+                data = resp.json()
+                content = data.get('answer', '')
+                for r in data.get('results', [])[:3]:
+                    content += '\n' + r.get('content', '')
+                    if not source_url and any(k in r.get('url', '').lower()
+                                               for k in ['businesswire', 'prnewswire', 'ir.']):
+                        source_url = r.get('url', '')
+                if len(content) > 500:
+                    break
+        except Exception as e:
+            print(f"    [QoQ] Tavily search error: {e}")
+
+    if not content:
+        print(f"    [QoQ] No prior quarter data found, skipping QoQ")
+        return None
+
+    # LLM-extract key metrics from the prior quarter content
+    extract_prompt = f"""从以下{ticker} {prior_label}季度财报相关内容中，提取关键财务指标。
+只输出JSON格式，key为指标中文名，value为数值字符串（如"RMB 247,795 Mn"）。
+如某指标未提及则不输出该key（不要写"未找到"）。
+
+需要提取（如原文有）：
+- 总营收
+- 经调整EBITA（或经调整营业利润）
+- 非GAAP净利润
+- 自由现金流
+- 云智能集团营收（如适用）
+- 中国电商集团营收（如适用）
+- 国际商业零售营收（如适用）
+
+内容：
+{content[:5000]}"""
+
+    prior_metrics = _llm_json(extract_prompt, tag="PriorQ")
+    if prior_metrics and len(prior_metrics) >= 1:
+        print(f"    [QoQ] Found {len(prior_metrics)} prior-quarter metrics: "
+              f"{list(prior_metrics.keys())}")
+        return {
+            'quarter': prior_label,
+            'cal_desc': cal_desc,
+            'metrics': prior_metrics,
+            'source_url': source_url,
+        }
+
+    print(f"    [QoQ] LLM extraction returned empty, skipping QoQ")
+    return None
+
+
+def _parse_rmb_mn(val_str):
+    """Parse various revenue/profit formats → float in Mn RMB.
+    Handles: 'RMB 247,795 Mn', '¥2,477.95亿', 'RMB284,843 million', '284843'.
+    Returns None if unparseable.
+    """
+    if not val_str:
+        return None
+    s = str(val_str).replace(',', '').strip()
+    # 亿 → Mn (1亿 = 100Mn)
+    m = re.search(r'[¥￥]?\s*([\d.]+)\s*亿', s)
+    if m:
+        return float(m.group(1)) * 100
+    # RMB/CNY xxx Mn/million/million RMB
+    m = re.search(r'(?:RMB|CNY)?\s*([\d.]+)\s*(?:Mn|mn|million)', s, re.IGNORECASE)
+    if m:
+        return float(m.group(1))
+    # Billion
+    m = re.search(r'(?:RMB|CNY)?\s*([\d.]+)\s*(?:Bn|bn|billion)', s, re.IGNORECASE)
+    if m:
+        return float(m.group(1)) * 1000
+    # Plain number
+    m = re.search(r'^([\d.]+)$', s.strip())
+    if m:
+        return float(m.group(1))
+    return None
+
+
+def _compute_margin_pct(ebita_str, revenue_str):
+    """Compute EBITA/operating margin from two value strings.
+    Returns formatted string like '19.3%' or None if either is unparseable / revenue is 0.
+    """
+    ebita = _parse_rmb_mn(ebita_str)
+    rev = _parse_rmb_mn(revenue_str)
+    if ebita is None or rev is None or rev == 0:
+        return None
+    pct = ebita / rev * 100
+    return f"{pct:.1f}%"
+
+
+def _build_multi_quarter_context(prior1_data, prior2_data=None):
+    """
+    Build multi-quarter context string (Q-1 and Q-2) for injection into Ch1/Ch3/Ch4.
+    Both prior1_data and prior2_data are return values of _fetch_prior_quarter_data().
+    Automatically computes margin% = EBITA / Revenue for each quarter.
+    Works for any company/ticker — no YTD arithmetic, just direct search results.
+    """
+    if not prior1_data:
+        return ''
+
+    sections = []
+
+    def _format_quarter_block(qdata, label):
+        pq = qdata['quarter']
+        pm = qdata['metrics']
+        block = [f"\n=== {label} ({pq}) 关键数据（用于计算 QoQ 和利润率趋势）==="]
+        for k, v in pm.items():
+            block.append(f"  {k}: {v}")
+        # Auto-compute margin if revenue + EBITA both present
+        rev_key = next((k for k in pm if '营收' in k and '集团' not in k and '云' not in k
+                        and '国际' not in k and '电商' not in k), None)
+        ebita_key = next((k for k in pm if 'ebita' in k.lower() or '调整' in k), None)
+        if rev_key and ebita_key:
+            margin = _compute_margin_pct(pm[ebita_key], pm[rev_key])
+            if margin:
+                block.append(f"  （自动计算）经调整EBITA利润率: {margin}")
+        return '\n'.join(block)
+
+    sections.append(_format_quarter_block(prior1_data, "上季度 Q-1"))
+
+    if prior2_data:
+        sections.append(_format_quarter_block(prior2_data, "上上季度 Q-2"))
+
+    sections.append(
+        "\n  注意：请用以上数据计算 QoQ% = (本季 - 上季) / 上季 × 100%，"
+        "并在第三章收入表格和第四章利润率表格的 QoQ变化 列中填入计算结果。"
+        "利润率 = 经调整EBITA / 总营收 × 100%。"
+    )
+    return '\n'.join(sections)
+
+
 def _llm_call(prompt, max_tokens=8000, temperature=0.2, tag=""):
     for model in MODEL_CHAIN:
         for attempt in range(2):
@@ -860,6 +1111,9 @@ def collect_quarterly_data(company_name, ticker, quarter):
                 for r in tavily_data.get('results', [])[:3]:
                     pr_content += f"\n\n--- {r.get('url', '')} ---\n{r.get('content', '')}"
                     url = r.get('url', '')
+                    # Also capture businesswire/prnewswire URL specifically (for report footer)
+                    if any(k in url.lower() for k in ['businesswire', 'prnewswire', 'globenewswire', 'stocktitan']):
+                        result.setdefault('businesswire_url', url)
                     if not result['press_release_url'] and any(k in url.lower() for k in ['investor', 'earnings', 'press', 'newswire', 'meituan', 'tencent']):
                         result['press_release_url'] = url
                 
@@ -987,6 +1241,37 @@ def generate_earnings_report(quarterly_data, transcript_analysis, company_name, 
     
     fin_data = pr_content
     transcript_for_chapters = raw_transcript
+
+    # ── QoQ: Fetch prior quarter data for QoQ calculations ────────────────────
+    # Determines previous quarter automatically, searches via Tavily, calculates QoQ %
+    # This runs for any ticker - works universally for US/HK/A-share companies
+    prior_quarter_data = None
+    if quarter:
+        try:
+            prior_quarter_data = _fetch_prior_quarter_data(
+                ticker, quarter, TAVILY_API_KEY,
+                cn_name=_ADR_TO_CN.get(ticker, company_name)
+            )
+        except Exception as _qoq_err:
+            print(f"    [QoQ] Skipped: {_qoq_err}")
+
+    # Fetch Q-2 by calling the same function once more, treating Q-1 as "current"
+    # e.g. current=Q3 2026 → Q-1=Q2 2026 → calling again with Q2 2026 → Q-2=Q1 2026
+    # Universal: works for any company, no YTD arithmetic needed
+    prior2_quarter_data = None
+    if prior_quarter_data:
+        try:
+            prior2_quarter_data = _fetch_prior_quarter_data(
+                ticker, prior_quarter_data['quarter'], TAVILY_API_KEY,
+                cn_name=_ADR_TO_CN.get(ticker, company_name)
+            )
+        except Exception as _q2_err:
+            print(f"    [QoQ] Q-2 fetch skipped: {_q2_err}")
+
+    qoq_context = _build_multi_quarter_context(prior_quarter_data, prior2_quarter_data)
+
+    # ── Track businesswire URL separately for authoritative footer links ──────
+    bw_url = (quarterly_data.get('businesswire_url', '') if quarterly_data else '') or pr_url
     
     # yfinance basic market data for Ch8
     yf_str = ""
@@ -1095,13 +1380,29 @@ def generate_earnings_report(quarterly_data, transcript_analysis, company_name, 
         template_section = chapter_templates.get(ch_num, '')
         print(f"    [Report] {ch_num}/8: {CH_LABELS[ch_num]}...")
         
-        # Build data section — full text, no slicing
+        # Build data section — chapter-specific extraction to keep prompts manageable
+        # Full PR (~30k) + full transcript (~36k) = ~70k chars → overwhelms fallback models
+        # Instead, each chapter gets only relevant PR paragraphs (~6-7k) + focused transcript
         if ch_num == 8:
-            data_section = f"\nyfinance市场数据: {yf_str}\n\n财报/新闻稿原文:\n{fin_data}"
+            # Valuation: yfinance market data only
+            data_section = f"\nyfinance市场数据: {yf_str}\n\n财报/新闻稿原文(摘要):\n{fin_data[:2000]}"
+        elif ch_num in (2, 5):
+            # Thesis & Strategy: primarily transcript, brief PR context
+            data_section = (f"\n财报/新闻稿原文(摘要):\n{fin_data[:2500]}"
+                           f"\n\n电话会实录:\n{transcript_for_chapters}")
         else:
-            data_section = f"\n财报/新闻稿原文:\n{fin_data}\n\n电话会实录:\n{transcript_for_chapters}"
-        
-        prompt = f"""{SYS}
+            # Other chapters: targeted PR extraction + full transcript
+            ch_pr = _extract_chapter_pr(fin_data, ch_num, max_chars=6500)
+            ch_transcript_len = 6000 if ch_num == 5 else 4000
+            data_section = (f"\n财报/新闻稿原文（相关段落）:\n{ch_pr}"
+                           f"\n\n电话会实录:\n{transcript_for_chapters[:ch_transcript_len]}")
+
+        # Inject multi-quarter context for chapters with QoQ/trend tables
+        # Ch1=KPI summary, Ch3=Revenue trend, Ch4=Profit margin trend
+        if ch_num in (1, 3, 4) and qoq_context:
+            data_section += qoq_context
+
+        prompt = f"""
 
 请严格按照以下模板结构撰写本章内容。用提供的财报原文和电话会数据替换所有 [placeholder]。
 保留所有表格结构，填入实际数据。不要改变章节编号和标题。
@@ -1113,6 +1414,20 @@ def generate_earnings_report(quarterly_data, transcript_analysis, company_name, 
         
         result = _llm_call(prompt, CH_TOKENS[ch_num], tag=CH_TAGS[ch_num])
         
+        if not result:
+            # Condensed fallback: strip down to just the most critical data and retry
+            # This fires when ALL models failed (usually due to large prompt on fallback models)
+            print(f"    [Report] {ch_num}/8: condensed fallback attempt...")
+            short_pr = fin_data[:3000]
+            condensed_prompt = (
+                f"{SYS}\n\n"
+                f"请撰写本季度经营报告的「{CH_LABELS[ch_num]}」章节。"
+                f"使用 ## {ch_names_map[ch_num]}、{CH_LABELS[ch_num]} 作为标题，"
+                f"包含至少1个数据表格和简短分析段落。直接输出Markdown，不要前言。\n\n"
+                f"数据：\n{short_pr}"
+            )
+            result = _llm_call(condensed_prompt, 2000, tag=f"{CH_TAGS[ch_num]}_condensed")
+
         if result:
             md_sections.append(result.strip())
         else:
@@ -1131,9 +1446,10 @@ def generate_earnings_report(quarterly_data, transcript_analysis, company_name, 
 
 | 序号 | 材料 | 链接 |
 |------|------|------|
-| 1 | {company_name} {quarter} Earnings Release | {pr_url or '未获取'} |
-| 2 | {company_name} {quarter} Earnings Call Transcript | https://seekingalpha.com/symbol/{ticker}/earnings/transcripts |
-| 3 | SEC/港交所/上交所公告 | https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK={ticker} |
+| 1 | {company_name} {quarter} Earnings Release (BusinessWire) | {bw_url or pr_url or '未获取'} |
+| 2 | {company_name} {quarter} Earnings Call Transcript (Seeking Alpha) | https://seekingalpha.com/symbol/{ticker}/earnings/transcripts |
+| 3 | IR Press Release PDF | {pr_url or '未获取'} |
+| 4 | 上市公司SEC/港交所公告 | https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK={ticker} |
 
 ### 声明
 
