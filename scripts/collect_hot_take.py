@@ -239,6 +239,10 @@ def build_report(topic: str, analysis: dict, n_tweets: int, n_web: int) -> str:
     md += "## 📌 事件概要\n\n"
     md += analysis.get("event_summary", "暂无概要。") + "\n\n"
 
+    # Synthesis (前置综合判断)
+    md += "## 💡 综合观察\n\n"
+    md += analysis.get("synthesis", "暂无综合分析。") + "\n\n"
+
     # Twitter Opinions
     twitter_ops = analysis.get("twitter_opinions", [])
     if twitter_ops:
@@ -267,10 +271,6 @@ def build_report(topic: str, analysis: dict, n_tweets: int, n_web: int) -> str:
             link_text = f"[🔗]({url})" if url else "-"
             md += f"| {source} | {opinion} | {link_text} |\n"
         md += "\n"
-
-    # Synthesis
-    md += "## 💡 综合观察\n\n"
-    md += analysis.get("synthesis", "暂无综合分析。") + "\n"
 
     print(f"  [Report] {len(md):,} chars generated")
     return md
