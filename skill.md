@@ -1,11 +1,11 @@
 ---
 name: professional-research
-description: Professional industry research system supporting 9 research types - product research, company research, industry panorama, trend analysis, policy research, academic briefing, KOL weekly digest, financial data extraction, and LLM leaderboard analysis. Generates standardized high-quality reports using template-driven workflows. Use this skill whenever the user asks about industry research, competitive analysis, company deep dives, trend forecasting, policy tracking, academic paper summaries, KOL opinions, tech leader weekly updates, market analysis, AI model rankings, leaderboard comparison, or any structured research that requires data collection and report generation. Also triggers on requests mentioning "研究报告", "行业分析", "竞品分析", "公司研究", "趋势研判", "政策追踪", "论文简报", "KOL周报", "大佬推文", "科技领袖", "排行榜", "榜单分析", "模型对比", "arena", "leaderboard", "market research", "industry report", or similar research-oriented phrases.
+description: Professional industry research system supporting 10 research types - product research, company research, industry panorama, trend analysis, policy research, academic briefing, KOL weekly digest, financial data extraction, LLM leaderboard analysis, and hot take event analysis. Generates standardized high-quality reports using template-driven workflows. Use this skill whenever the user asks about industry research, competitive analysis, company deep dives, trend forecasting, policy tracking, academic paper summaries, KOL opinions, tech leader weekly updates, market analysis, AI model rankings, leaderboard comparison, hot event opinions, or any structured research that requires data collection and report generation. Also triggers on requests mentioning "研究报告", "行业分析", "竞品分析", "公司研究", "趋势研判", "政策追踪", "论文简报", "KOL周报", "大佬推文", "科技领袖", "排行榜", "榜单分析", "模型对比", "arena", "leaderboard", "market research", "industry report", "热点速评", "事件分析", "hot take", "各方观点", "舆论分析", or similar research-oriented phrases.
 ---
 
 # Professional Research Skill
 
-A template-driven, multi-source research framework that produces institutional-grade reports across 9 research types.
+A template-driven, multi-source research framework that produces institutional-grade reports across 10 research types.
 
 ## 🛑 Global Execution Rules (MUST FOLLOW)
 
@@ -1093,6 +1093,38 @@ When encountering 503 errors, automatically try models in this order:
 
 Implementation details in `scripts/llm_client.py`.
 
+## Type 10: 热点速评（Hot Take）
+
+**Triggers**: User asks about opinions on a **breaking news event or hot topic**. Key phrases:
+- "热点速评", "事件分析", "各方观点", "hot take", "舆论分析"
+- "[事件名] 怎么看", "市场怎么看 [事件]", "各方反应"
+**Template**: `templates/hot_take.md`
+
+**🛑 核心原则：脚本驱动，短平快**
+
+> ✅ **FIRST ACTION**: 收到请求后，立即运行 `collect_hot_take.py`，不做任何手动搜索。
+> ⏱️ 目标 5 分钟内出结果。
+
+**运行命令：**
+```bash
+cd "C:/Users/wangtian/.claude/skills/professional-research" && python scripts/collect_hot_take.py --topic "[事件关键词]" --output "D:/clauderesult/claudeMMDD/"
+```
+
+可选参数：
+- `--max-tweets 20` — Twitter 条数上限（默认 20）
+- `--max-web 15` — Web 结果上限（默认 15）
+
+脚本自动完成：
+1. LLM 生成中英文搜索关键词（5 组）
+2. Twitter 关键词搜索 Top 推文（按互动量排序）
+3. Tavily Web 搜索新闻/博客
+4. LLM 提取观点 + 生成事件概要 + 综合观察
+5. 输出 Markdown + Word
+
+**脚本完成后**：读取 `.md` 报告呈现给用户。
+
+---
+
 ## Quality Red Lines
 
 1. **ZERO Fabrication (最高优先级)**: 绝对禁止编造任何数据、引用、公司名、案例、实验结果。商业数据和技术数据同等要求。
@@ -1120,6 +1152,7 @@ Implementation details in `scripts/llm_client.py`.
 | 8A. Financial Data | `references/type8_financial_data.md` | `financial_data_report.md` | SEC, EastMoney, PDF | `collect_financial_deep.py` |
 | 8B. Earnings | `references/type8_financial_data.md` | `earnings_quarterly.md` | Transcript, Press, SEC | `collect_earnings.py` (data) |
 | 9. Leaderboard | `references/type9_leaderboard.md` | `leaderboard_analysis.md` | LMArena, ArtificialAnalysis | `run_leaderboard.py` |
+| 10. Hot Take | — | `hot_take.md` | Twitter/X, Tavily Web | `collect_hot_take.py` |
 
 ## Output
 
