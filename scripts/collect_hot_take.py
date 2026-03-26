@@ -166,21 +166,21 @@ def extract_opinions_from_sources(topic: str, tweets: list, web_results: list) -
 请完成以下任务：
 
 1. **事件概要**（event_summary）：用3-5句话简明扼要说清楚发生了什么
-2. **Twitter观点**（twitter_opinions）：从推文中提取有价值的观点，每条包含：
+2. **Twitter观点**（twitter_opinions）：翻译每条有价值的推文原文，每条包含：
    - author: 作者名和用户名
-   - opinion: 核心观点（1-2句话，保留原始表述的精华）
+   - opinion: 推文原文的中文翻译（完整翻译，不要提炼或缩写，让读者能看出原作者到底说了什么）
    - engagement: 互动量描述（如"❤️ 1.2K 🔄 300"）
    - url: 原始链接
-3. **媒体/博客观点**（web_opinions）：从网页文章中提取有价值的观点，每条包含：
+3. **媒体/博客观点**（web_opinions）：从网页文章中提取核心观点，每条包含：
    - source: 来源名称
-   - opinion: 核心观点（1-2句话）
+   - opinion: 文章的核心观点（2-3句话，保留关键信息）
    - url: 原始链接
 4. **综合观察**（synthesis）：一段话总结——主流声音是什么、有什么分歧、值得注意的独特视角
 
 要求：
 - 直接呈现各方观点，不做看多/看空分类
 - 保留信息多样性，不要只选同质观点
-- 如果推文是英文，观点摘要用中文转述
+- Twitter 推文必须完整翻译原文，不要概括提炼
 - 输出JSON格式
 
 === TWITTER 数据 ===
@@ -193,7 +193,7 @@ def extract_opinions_from_sources(topic: str, tweets: list, web_results: list) -
 {{
   "event_summary": "...",
   "twitter_opinions": [
-    {{"author": "@xxx (Name)", "opinion": "...", "engagement": "❤️ X 🔄 Y", "url": "..."}}
+    {{"author": "@xxx (Name)", "opinion": "推文原文的完整中文翻译...", "engagement": "❤️ X 🔄 Y", "url": "..."}}
   ],
   "web_opinions": [
     {{"source": "The Verge", "opinion": "...", "url": "..."}}
@@ -243,14 +243,14 @@ def build_report(topic: str, analysis: dict, n_tweets: int, n_web: int) -> str:
     twitter_ops = analysis.get("twitter_opinions", [])
     if twitter_ops:
         md += "## 🗣️ Twitter/X 热议\n\n"
-        md += "| 来源 | 核心观点 | 互动量 | 链接 |\n"
+        md += "| 来源 | 原文翻译 | 互动量 | 链接 |\n"
         md += "|------|----------|--------|------|\n"
         for op in twitter_ops:
             author = op.get("author", "")
             opinion = op.get("opinion", "").replace("|", "\\|").replace("\n", " ")
             engagement = op.get("engagement", "")
             url = op.get("url", "")
-            link_text = f"[tweet]({url})" if url else "-"
+            link_text = f"[🔗]({url})" if url else "-"
             md += f"| {author} | {opinion} | {engagement} | {link_text} |\n"
         md += "\n"
 
@@ -264,7 +264,7 @@ def build_report(topic: str, analysis: dict, n_tweets: int, n_web: int) -> str:
             source = op.get("source", "")
             opinion = op.get("opinion", "").replace("|", "\\|").replace("\n", " ")
             url = op.get("url", "")
-            link_text = f"[文章]({url})" if url else "-"
+            link_text = f"[🔗]({url})" if url else "-"
             md += f"| {source} | {opinion} | {link_text} |\n"
         md += "\n"
 
