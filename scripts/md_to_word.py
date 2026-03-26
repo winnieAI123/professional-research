@@ -235,6 +235,23 @@ def repair_markdown_tables(content):
     return result
 
 
+def _has_link_syntax(text):
+    """Check if text contains Markdown link syntax [text](url)."""
+    return bool(re.search(r'\[([^\]]+)\]\(([^)]+)\)', text))
+
+
+def _clean_cell_text(text):
+    """Clean cell text but PRESERVE link syntax for hyperlink rendering."""
+    if _has_link_syntax(text):
+        # Only clean bold/italic/code, keep links intact
+        text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)
+        text = re.sub(r'__([^_]+)__', r'\1', text)
+        text = re.sub(r'\*([^*]+)\*', r'\1', text)
+        text = re.sub(r'`([^`]+)`', r'\1', text)
+        return text.strip()
+    return clean_markdown_syntax(text)
+
+
 def parse_table(lines):
     """Parse Markdown table lines into 2D list."""
     rows = []
@@ -248,8 +265,8 @@ def parse_table(lines):
         # Also skip lines that are purely dashes/spaces (no actual data)
         if re.match(r'^[\s\-|:]+$', stripped):
             continue
-        # Split and clean cells
-        cells = [clean_markdown_syntax(c.strip()) for c in line.split('|')[1:-1]]
+        # Split and clean cells — preserve link syntax for hyperlink rendering
+        cells = [_clean_cell_text(c.strip()) for c in line.split('|')[1:-1]]
         if cells:
             rows.append(cells)
     return rows
@@ -329,7 +346,15 @@ def add_styled_table(doc, data):
             if j >= num_cols:
                 continue
             cell = table.rows[i].cells[j]
-            cell.text = cell_text
+
+            # Check if cell contains a link — use add_rich_text for hyperlink rendering
+            if _has_link_syntax(cell_text):
+                # Clear default paragraph and use add_rich_text for link support
+                cell.text = ''  # Clear
+                para = cell.paragraphs[0]
+                add_rich_text(para, cell_text, size=FONT_CONFIG['body_size'])
+            else:
+                cell.text = cell_text
 
             # Cell padding
             _set_cell_padding(cell)
