@@ -36,10 +36,10 @@ gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 # LLM Call with 4-Model Fallback
 # ============================================================
 MODEL_CHAIN = [
-    'gemini-2.5-pro',
-    'gemini-3.1-pro-preview',
     'gemini-3-pro-preview',
     'gemini-2.5-flash',
+    'gemini-3.1-pro-preview',
+    'gemini-2.5-pro',
 ]
 
 def _fmt_num(val, currency=''):
@@ -210,7 +210,7 @@ def _fetch_prior_quarter_data(ticker, current_quarter, tavily_key, cn_name=''):
                     if not source_url and any(k in r.get('url', '').lower()
                                                for k in ['businesswire', 'prnewswire', 'ir.']):
                         source_url = r.get('url', '')
-                if len(content) > 500:
+                if len(content) > 100:
                     break
         except Exception as e:
             print(f"    [QoQ] Tavily search error: {e}")
@@ -249,6 +249,64 @@ def _fetch_prior_quarter_data(ticker, current_quarter, tavily_key, cn_name=''):
 
     print(f"    [QoQ] LLM extraction returned empty, skipping QoQ")
     return None
+
+
+def _fetch_consensus_yf(ticker, quarter):
+    """
+    Fetch analyst consensus vs actual for the target quarter using yfinance.
+    Returns a formatted string ready to inject into Ch1 data_section.
+    Falls back gracefully if yfinance returns nothing.
+    """
+    try:
+        import yfinance as yf
+        stock = yf.Ticker(ticker)
+
+        lines = [f"\n=== 市场共识预期 vs 实际（来源: Yahoo Finance / yfinance）==="]
+
+        # 1. Earnings history: find the row matching the target quarter
+        hist = stock.earnings_history
+        if hist is not None and not hist.empty:
+            # quarters are stored as period-end dates, e.g. 2025-12-31
+            # match by finding the most recent row
+            hist = hist.sort_index()
+            latest = hist.iloc[-1]
+            lines.append(f"  EPS（最近已报季度）:")
+            lines.append(f"    实际 EPS: {latest.get('epsActual', 'N/A')}")
+            lines.append(f"    共识预期 EPS: {latest.get('epsEstimate', 'N/A')}")
+            diff = latest.get('epsDifference', None)
+            pct  = latest.get('surprisePercent', None)
+            if diff is not None:
+                direction = "BEAT" if float(diff) > 0 else "MISS"
+                lines.append(f"    差异: {diff:+.2f}  →  {direction} {abs(float(pct)*100):.1f}%")
+
+        # 2. Revenue estimate: current quarter (0q row)
+        rev_est = stock.revenue_estimate
+        if rev_est is not None and not rev_est.empty and '0q' in rev_est.index:
+            row = rev_est.loc['0q']
+            lines.append(f"  营收共识预期（当前季度）:")
+            lines.append(f"    分析师均值: {row.get('avg', 'N/A'):,.0f}")
+            lines.append(f"    分析师数量: {int(row.get('numberOfAnalysts', 0))}")
+
+        # 3. Earnings estimate: current quarter (0q row) and next year (0y)
+        eps_est = stock.earnings_estimate
+        if eps_est is not None and not eps_est.empty:
+            if '0q' in eps_est.index:
+                row = eps_est.loc['0q']
+                lines.append(f"  下季度 EPS 共识预期: {row.get('avg', 'N/A')} "
+                             f"（{int(row.get('numberOfAnalysts', 0))} 家机构）")
+            if '0y' in eps_est.index:
+                row = eps_est.loc['0y']
+                lines.append(f"  本财年 EPS 共识预期: {row.get('avg', 'N/A')} "
+                             f"（{int(row.get('numberOfAnalysts', 0))} 家机构）")
+
+        lines.append("  注意：请在第一章KPI表格的「市场预期」和「Beat/Miss」列中填入以上数据。")
+        result = '\n'.join(lines)
+        print(f"    [Consensus] yfinance OK: {len(lines)-2} data points")
+        return result
+
+    except Exception as e:
+        print(f"    [Consensus] yfinance failed: {e}")
+        return ''
 
 
 def _parse_rmb_mn(val_str):
@@ -1289,7 +1347,10 @@ def generate_earnings_report(quarterly_data, transcript_analysis, company_name, 
         }, ensure_ascii=False, default=str)
     except Exception as e:
         print(f"    yfinance market data: {e}")
-    
+
+    # ── Consensus estimates via yfinance (Beat/Miss, next-quarter EPS/Rev) ─────
+    consensus_str = _fetch_consensus_yf(ticker, quarter)
+
     SYS = f"你是专业买方分析师，正在撰写{company_name} {quarter}季度经营分析报告。不要写开场白。直接输出Markdown。严格使用提供的数据，你必须仔细阅读提供的财报原文和电话会实录，从中提取具体数字填入表格。只有当原文中确实完全没有提及某个指标时，才写\"未披露\"。禁止编造。"
     
     md_sections = []
@@ -1401,6 +1462,10 @@ def generate_earnings_report(quarterly_data, transcript_analysis, company_name, 
         # Ch1=KPI summary, Ch3=Revenue trend, Ch4=Profit margin trend
         if ch_num in (1, 3, 4) and qoq_context:
             data_section += qoq_context
+
+        # Inject consensus estimates into Ch1 (KPI table) and Ch8 (valuation)
+        if ch_num in (1, 8) and consensus_str:
+            data_section += consensus_str
 
         prompt = f"""
 
