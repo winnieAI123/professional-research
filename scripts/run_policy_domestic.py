@@ -15,7 +15,7 @@ Usage:
   python run_policy_domestic.py
   python run_policy_domestic.py --domain "AI与机器人" --period "2026年3月"
   python run_policy_domestic.py --domain "金融科技与消费信贷" --focus "数字人民币信贷政策"
-  python run_policy_domestic.py --output D:\\reports\\policy
+  python run_policy_domestic.py --output ~/clauderesult/claude0326/policy
   python run_policy_domestic.py --skip-search   (复用已有数据，重新生成报告)
   python run_policy_domestic.py --force-search  (强制重新搜索，忽略缓存)
 

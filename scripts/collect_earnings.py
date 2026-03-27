@@ -2002,7 +2002,7 @@ if __name__ == '__main__':
     parser.add_argument('--press-release-file', default=None,
                         help='手动提供业绩新闻稿文件路径（txt），跳过 IR 抓取')
     args = parser.parse_args()
-    output_dir = args.output or os.path.join('D:\\clauderesult', f'claude{datetime.now().strftime("%m%d")}', f'earnings_{args.ticker.lower()}')
+    output_dir = args.output or os.path.join(os.path.expanduser('~/clauderesult'), f'claude{datetime.now().strftime("%m%d")}', f'earnings_{args.ticker.lower()}')
     run_earnings_pipeline([args.ticker], args.query, output_dir,
                           transcript_file=args.transcript_file,
                           press_release_file=args.press_release_file,

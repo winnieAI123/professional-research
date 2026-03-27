@@ -13,7 +13,7 @@ Usage:
   python run_leaderboard.py
   python run_leaderboard.py --date 20260312
   python run_leaderboard.py --skip-scrape --date 20260312
-  python run_leaderboard.py --output D:\\reports\\leaderboard
+  python run_leaderboard.py --output ~/clauderesult/claude0326/leaderboard
 """
 import argparse
 import os

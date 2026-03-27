@@ -24,7 +24,7 @@ Usage:
   python collect_nas.py --recent 7
 
   # Read specific file content
-  python collect_nas.py --read "\\\\NASONE\\Data\\...\\report.md"
+  python collect_nas.py --read "~/NAS/.../report.md"
 """
 import os
 import re
@@ -37,8 +37,8 @@ from datetime import datetime, timedelta
 # ============================================================
 # Config
 # ============================================================
-DEFAULT_NAS_PATH = r"\\NASONE\Data\wechat_info_diary2"
-LOCAL_INDEX_DIR = r"D:\nas_search_index"
+DEFAULT_NAS_PATH = os.environ.get("NAS_PATH", os.path.expanduser("~/NAS/wechat_info_diary2"))
+LOCAL_INDEX_DIR = os.path.expanduser("~/nas_search_index")
 SUPPORTED_EXTENSIONS = {".md", ".pdf", ".txt"}
 MAX_PREVIEW_CHARS = 300
 MAX_CONTEXT_CHARS = 5000

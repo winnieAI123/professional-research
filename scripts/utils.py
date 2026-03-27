@@ -223,10 +223,10 @@ def get_output_dir() -> str:
         os.makedirs(custom, exist_ok=True)
         return custom
     
-    # Original author's path
+    # Standard output path (macOS)
     today = datetime.now().strftime("%m%d")
-    personal_dir = os.path.join("D:\\clauderesult", f"claude{today}")
-    if os.path.exists("D:\\clauderesult"):
+    personal_dir = os.path.join(os.path.expanduser("~/clauderesult"), f"claude{today}")
+    if os.path.exists(os.path.expanduser("~/clauderesult")):
         os.makedirs(personal_dir, exist_ok=True)
         return personal_dir
     

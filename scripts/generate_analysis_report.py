@@ -16,8 +16,8 @@ generate_analysis_report.py
 
 用法:
     python generate_analysis_report.py \\
-        --data D:/clauderesult/claude0319/extracted_data.json \\
-        --output D:/clauderesult/claude0319/ \\
+        --data ~/clauderesult/claude0319/extracted_data.json \\
+        --output ~/clauderesult/claude0319/ \\
         --query "分产品余额、收入和利润"
 """
 
