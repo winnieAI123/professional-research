@@ -3,3 +3,10 @@
 __pycache__/
 *.pyc
 data/
+
+# macOS
+.DS_Store
+
+# Scheduler logs and state
+*.log
+config/earnings_state.json
