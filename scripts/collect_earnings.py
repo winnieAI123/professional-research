@@ -498,6 +498,7 @@ _CN_ADR_MAP = {
     '声网': {'t': 'API', 'c': 'USD'},
     'BOSS直聘': {'t': 'BZ', 'c': 'USD'}, '高途': {'t': 'GOTU', 'c': 'USD'},
     '趣头条': {'t': 'QTT', 'c': 'USD'},
+    '快手': {'t': 'KUASF', 'c': 'RMB'},
 }
 
 # Reverse map: ADR ticker → Chinese name (for better Tavily search fallback)
@@ -510,6 +511,7 @@ _HK_TO_ADR = {
     '9999.HK': 'NTES', '9888.HK': 'BIDU',
     '3690.HK': 'MPNGY', '9626.HK': 'BILI',
     '1810.HK': 'XIACY',
+    '1024.HK': 'KUASF', '01024.HK': 'KUASF',
 }
 
 def _resolve_sa_ticker(company_name, detect_ticker):
@@ -878,6 +880,12 @@ _IR_CONFIGS = {
         'detail_prefix': 'https://baidu.gcs-web.com',
         'type': 'baidu_gcs',
     },
+    'KUASF': {
+        'listing_url': 'https://ir.kuaishou.com/zh-hans/corporate-filings/quarterly-results',
+        'doc_pattern': r'system/files-encrypted/[^"\'\'\>\s]+\.pdf',
+        'pdf_base': 'https://ir.kuaishou.com/',
+        'type': 'nasdaq_ir_cffi',
+    },
 }
 
 
@@ -1061,10 +1069,12 @@ def fetch_ir_press_release(ticker):
             if matches:
                 # Deduplicate
                 matches = list(dict.fromkeys(matches))
-                # Prefer earnings PDFs (filter by 'Announces' keyword)
+                # Prefer earnings PDFs (filter by keyword)
+                # 'hkex' and 'eps' added for HK-listed companies like Kuaishou
+                pr_keywords = ['announces', 'results', 'earnings', 'hkex', 'eps']
                 for m in matches:
                     decoded = requests.utils.unquote(m)
-                    if any(kw in decoded.lower() for kw in ['announces', 'results', 'earnings']):
+                    if any(kw in decoded.lower() for kw in pr_keywords):
                         pdf_url = m if m.startswith('http') else f"{config['pdf_base']}{m}"
                         print(f"    [IR] Found PDF: ...{decoded[-60:]}")
                         break
