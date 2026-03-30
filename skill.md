@@ -799,12 +799,37 @@ cd "C:/Users/wangtian/.claude/skills/professional-research" && python scripts/co
 - Company name + any quarter/fiscal year reference
 **Template**: `templates/earnings_quarterly.md`
 
-**🛑🛑🛑 核心原则：脚本驱动，禁止手动搜索 🛑🛑🛑**
+**🛑🛑🛑 核心原则：脚本先行，三阶段工作流 🛑🛑🛑**
 
-> ❌ **FORBIDDEN**: 禁止在运行脚本之前或替代脚本使用 Tavily、Google Search、yfinance 或任何 MCP 工具搜索财报数据。
+> ❌ **FORBIDDEN**: 禁止不跑脚本直接用搜索数据写报告。脚本是获取官方原文（Transcript + Press Release）的唯一可靠途径。
 > ❌ **FORBIDDEN**: 禁止自行判断"最新季度"是什么——脚本内部 `discover_latest_quarter()` 会自动通过 SA API 确定。
-> ❌ **FORBIDDEN**: 禁止在脚本运行前开始写报告。
-> ✅ **FIRST AND ONLY ACTION**: 收到请求后，**立即运行脚本**，不做任何其他操作。
+> ❌ **FORBIDDEN**: 禁止在脚本运行前开始写报告正文。
+> ❌ **FORBIDDEN**: 禁止直接把脚本自动生成的报告（`_Earnings_Update.md/docx`）交付用户——脚本报告因 yfinance TLS 错误、Tavily 报错等原因经常有大量 N/A 和 LLM 提取错误，质量不达标。
+> ✅ **FIRST ACTION**: 收到请求后，**立即运行脚本（后台）**，同时并行用搜索收集分析师观点和市场反应。
+
+**🔑 脚本的核心价值 = 下载的原文文件，不是它自动生成的报告**
+
+> 脚本最重要的产出是 `_transcript.txt`（完整电话会原文）和 `_press_release.txt`（IR官网 Press Release）。
+> 脚本自动生成的 `_Earnings_Update.md` 仅作参考，不直接交付。Agent 必须自己读原文、结合搜索数据，撰写完整报告。
+
+**📋 三阶段工作流（MANDATORY）**
+
+> **阶段1：脚本获取官方原文（必须先做）**
+> - 立即运行 `collect_earnings.py --ticker [TICKER]`（后台）
+> - 等待脚本完成，确认 `_transcript.txt` 和 `_press_release.txt` 已生成
+>
+> **阶段2：并行搜索补充材料（脚本运行期间）**
+> - 用 Tavily/搜索工具收集：市场预期（Beat/Miss）、分析师评级/目标价、股价反应、竞品对比、深度分析文章
+> - 这些信息脚本拿不到，是报告不可或缺的组成部分
+>
+> **阶段3：自己读原文 + 撰写完整报告（脚本完成后）**
+> - 读 `_press_release.txt` → 自己提取分业务收入、费用明细、KPI 精确数字
+> - 读 `_transcript.txt` → 自己提取管理层原话、Q&A 关键问答
+> - 结合阶段2的搜索数据
+> - 自己撰写完整 8 章报告，**确保所有表格字段填满，不留 N/A**
+> - 用 `md_to_word.py` 转换 Word
+>
+> **案例教训（2026-03-30）**：快手财报分析时跳过脚本直接用搜索写报告，被用户指出不够可信。而脚本自动生成的报告因 yfinance 挂掉有29个 N/A 字段。最终确认最优方案 = 脚本拿原文 + 搜索补充 + 自己写报告。
 
 ---
 
