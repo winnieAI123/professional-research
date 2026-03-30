@@ -1,0 +1,22 @@
+{
+  "watchlist": [
+    {"ticker": "BABA",  "cn_name": "阿里巴巴", "hk_code": "9988.HK", "ir_type": "baba",          "priority": "high"},
+    {"ticker": "PDD",   "cn_name": "拼多多",   "hk_code": null,       "ir_type": "nasdaq_ir_cffi", "priority": "high"},
+    {"ticker": "JD",    "cn_name": "京东",     "hk_code": "9618.HK", "ir_type": "nasdaq_ir_cffi", "priority": "high"},
+    {"ticker": "TCEHY", "cn_name": "腾讯",     "hk_code": "0700.HK", "ir_type": "tencent",        "priority": "high"},
+    {"ticker": "MPNGY", "cn_name": "美团",     "hk_code": "3690.HK", "ir_type": "meituan",        "priority": "high"},
+    {"ticker": "BIDU",  "cn_name": "百度",     "hk_code": "9888.HK", "ir_type": "baidu_gcs",      "priority": "high"},
+    {"ticker": "NTES",  "cn_name": "网易",     "hk_code": "9999.HK", "ir_type": "nasdaq_ir_cffi", "priority": "high"},
+    {"ticker": "BILI",  "cn_name": "哔哩哔哩",  "hk_code": "9626.HK", "ir_type": "bilibili",       "priority": "high"},
+    {"ticker": "KUASF", "cn_name": "快手",     "hk_code": "1024.HK", "ir_type": "nasdaq_ir_cffi", "priority": "high"}
+  ],
+  "settings": {
+    "check_time": "09:00",
+    "trigger_delay_days": 2,
+    "retry_max_days": 5,
+    "output_base_dir": "/Users/winnie/clauderesult",
+    "log_file": "earnings_scheduler.log",
+    "notify_on_complete": true,
+    "notify_on_error": true
+  }
+}
