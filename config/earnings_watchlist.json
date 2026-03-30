@@ -11,9 +11,7 @@
     {"ticker": "KUASF", "cn_name": "快手",     "hk_code": "1024.HK", "ir_type": "nasdaq_ir_cffi", "priority": "high"}
   ],
   "settings": {
-    "check_time": "09:00",
-    "trigger_delay_days": 2,
-    "retry_max_days": 5,
+    "freshness_window_days": 5,
     "output_base_dir": "/Users/winnie/clauderesult",
     "log_file": "earnings_scheduler.log",
     "notify_on_complete": true,
