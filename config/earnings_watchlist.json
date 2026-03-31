@@ -8,7 +8,15 @@
     {"ticker": "BIDU",  "cn_name": "百度",     "hk_code": "9888.HK", "ir_type": "baidu_gcs",      "priority": "high"},
     {"ticker": "NTES",  "cn_name": "网易",     "hk_code": "9999.HK", "ir_type": "nasdaq_ir_cffi", "priority": "high"},
     {"ticker": "BILI",  "cn_name": "哔哩哔哩",  "hk_code": "9626.HK", "ir_type": "bilibili",       "priority": "high"},
-    {"ticker": "KUASF", "cn_name": "快手",     "hk_code": "1024.HK", "ir_type": "nasdaq_ir_cffi", "priority": "high"}
+    {"ticker": "KUASF", "cn_name": "快手",     "hk_code": "1024.HK", "ir_type": "nasdaq_ir_cffi", "priority": "high"},
+    {"ticker": "AAPL",  "cn_name": "苹果",     "hk_code": null,      "ir_type": "fallback",       "priority": "high"},
+    {"ticker": "MSFT",  "cn_name": "微软",     "hk_code": null,      "ir_type": "fallback",       "priority": "high"},
+    {"ticker": "GOOGL", "cn_name": "谷歌",     "hk_code": null,      "ir_type": "fallback",       "priority": "high"},
+    {"ticker": "AMZN",  "cn_name": "亚马逊",   "hk_code": null,      "ir_type": "fallback",       "priority": "high"},
+    {"ticker": "META",  "cn_name": "Meta",     "hk_code": null,      "ir_type": "fallback",       "priority": "high"},
+    {"ticker": "TSLA",  "cn_name": "特斯拉",   "hk_code": null,      "ir_type": "fallback",       "priority": "high"},
+    {"ticker": "NVDA",  "cn_name": "英伟达",   "hk_code": null,      "ir_type": "fallback",       "priority": "high"},
+    {"ticker": "TSM",   "cn_name": "台积电",   "hk_code": null,      "ir_type": "fallback",       "priority": "high"}
   ],
   "settings": {
     "freshness_window_days": 5,

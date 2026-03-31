@@ -32,6 +32,9 @@ import time
 import argparse
 import logging
 import subprocess
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta
 
 # ============================================================
@@ -91,6 +94,49 @@ def load_watchlist():
     """Load the earnings watchlist configuration."""
     with open(WATCHLIST_FILE, 'r', encoding='utf-8') as f:
         return json.load(f)
+
+
+# ============================================================
+# Email Notification
+# ============================================================
+def send_email_notification(cn_name, ticker, quarter, report_path, logger):
+    """Send an email notification when a new earnings report is ready."""
+    sender = os.environ.get('EMAIL_SENDER', 'wangtian_winnie@163.com')
+    password = os.environ.get('EMAIL_PASSWORD', '')
+    # 默认发给自己（可用逗号分隔多个邮箱）
+    receiver = os.environ.get('EMAIL_RECEIVERS', 'wangtian_winnie@163.com,2386089104@qq.com')
+    
+    if not password:
+        logger.warning("  [Email] 缺少 EMAIL_PASSWORD 环境变量，跳过发送邮件。")
+        return
+        
+    subject = f"🔔 [新财报到达] {cn_name} ({ticker}) {quarter} 深度分析已出炉"
+    body = (
+        f"Hi Winnie,\n\n"
+        f"全自动财报监控系统就在刚刚捕获并完成了：【{cn_name} ({ticker}) {quarter}】的最新的分析！\n\n"
+        f"报告全文（含图表和长文总结）已经默默保存在了你的电脑里，完整路径如下：\n"
+        f"{report_path}\n\n"
+        f"下次有空打开电脑时直接去看吧~\n\n"
+        f"-- \nAI Earnings Scheduler (由 Launchd 后台忠实执行)"
+    )
+    
+    msg = MIMEMultipart()
+    msg['From'] = sender
+    msg['To'] = receiver
+    msg['Subject'] = subject
+    msg.attach(MIMEText(body, 'plain', 'utf-8'))
+    
+    try:
+        # 使用你跑通的 163 邮箱配置
+        server = smtplib.SMTP('smtp.163.com', 25)
+        server.login(sender, password)
+        # 支持发给多个接收人
+        to_addrs = [r.strip() for r in receiver.split(',')]
+        server.send_message(msg, to_addrs=to_addrs)
+        server.quit()
+        logger.info(f"  📧 邮件通知已发送至 {receiver}")
+    except Exception as e:
+        logger.error(f"  📧 邮件发送异常: {e}")
 
 
 # ============================================================
@@ -411,6 +457,9 @@ def run_scheduler(dry_run=False, force_ticker=None):
                     'report_path': report_path,
                 }
                 logger.info(f'  ✅ {cn_name} {quarter} → {report_path}')
+                
+                # 📢 调用邮件提醒发送器
+                send_email_notification(cn_name, ticker, quarter, report_path, logger)
             else:
                 logger.error(f'  ❌ {cn_name} {quarter} 分析失败')
 
