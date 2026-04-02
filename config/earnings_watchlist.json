@@ -16,7 +16,9 @@
     {"ticker": "META",  "cn_name": "Meta",     "hk_code": null,      "ir_type": "fallback",       "priority": "high"},
     {"ticker": "TSLA",  "cn_name": "特斯拉",   "hk_code": null,      "ir_type": "fallback",       "priority": "high"},
     {"ticker": "NVDA",  "cn_name": "英伟达",   "hk_code": null,      "ir_type": "fallback",       "priority": "high"},
-    {"ticker": "TSM",   "cn_name": "台积电",   "hk_code": null,      "ir_type": "fallback",       "priority": "high"}
+    {"ticker": "TSM",   "cn_name": "台积电",   "hk_code": null,      "ir_type": "fallback",       "priority": "high"},
+    {"ticker": "KATJF", "cn_name": "智谱AI", "hk_code": "2513.HK", "ir_type": "euroland_hk2513", "priority": "high"},
+    {"ticker": "MNMXF",   "cn_name": "MiniMax", "hk_code": "0100.HK", "ir_type": "minimax_ir", "priority": "high"}
   ],
   "settings": {
     "freshness_window_days": 5,

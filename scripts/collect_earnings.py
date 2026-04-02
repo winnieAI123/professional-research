@@ -499,6 +499,8 @@ _CN_ADR_MAP = {
     'BOSS直聘': {'t': 'BZ', 'c': 'USD'}, '高途': {'t': 'GOTU', 'c': 'USD'},
     '趣头条': {'t': 'QTT', 'c': 'USD'},
     '快手': {'t': 'KUASF', 'c': 'RMB'},
+    'MiniMax': {'t': 'MNMXF', 'c': 'USD'},
+    '智谱AI': {'t': 'KATJF', 'c': 'USD'},
 }
 
 # Reverse map: ADR ticker → Chinese name (for better Tavily search fallback)
@@ -558,6 +560,73 @@ Just the ticker, nothing else."""
     return detect_ticker or company_name, 'USD'
 
 
+def _discover_minimax():
+    headers = {
+        'accept': 'application/json, text/plain, */*',
+        'referer': 'https://ir.minimax.io/',
+        'user-agent': 'Mozilla/5.0'
+    }
+    target_quarter = ''
+    try:
+        resp = requests.get('https://ir.minimax.io/nezha/en/news?page=1', headers=headers, timeout=15)
+        if resp.status_code == 200:
+            items = resp.json().get('data', [])
+            for item in items:
+                title = item.get('title', '')
+                qm = re.search(r'(Q\d|Full\s*Year)\s+(\d{4})', title, re.IGNORECASE)
+                if qm:
+                    if 'full' in qm.group(1).lower():
+                        target_quarter = f"FY {qm.group(2)}"
+                    else:
+                        target_quarter = f"{qm.group(1).upper()} {qm.group(2)}"
+                    return target_quarter, True, [{'title': title, 'date': item.get('publishDate', '')[:10], 'slug': item.get('slug'), 'is_minimax': True, 'attributes': {'publishOn': item.get('publishDate', '')[:10], 'title': title}}]
+    except Exception as e:
+        print(f"    [Minimax IR] API check failed: {e}")
+    return '', False, []
+
+
+def _discover_euroland(companycode):
+    headers = {
+        'accept': 'application/json',
+        'content-type': 'application/x-www-form-urlencoded; charset=UTF-8',
+        'origin': 'https://asia.tools.euroland.com',
+        'referer': f'https://asia.tools.euroland.com/tools/pressreleases/?companycode={companycode}&lang=zh-tw',
+        'user-agent': 'Mozilla/5.0'
+    }
+    data = f'strDateFrom=19%2F12%2F2025&strDateTo=&typeFilter=&orderBy=0&pageIndex=0&pageJummp=10&hasTypeFilter=false&searchPhrase=&companyCode={companycode}&onlyInsiderInfo=false&lang=zh-TW&v=&alwaysIncludeInsiders=false&strYears='
+    try:
+        resp = requests.post('https://asia.tools.euroland.com/tools/Pressreleases/Main/GetNews/', headers=headers, data=data, timeout=15)
+        if resp.status_code == 200:
+            js = resp.json()
+            items = js.get('News', [])
+            attachments = js.get('Attachments', [])
+            for item in items:
+                title = item.get('title', '')
+                if '業績' in title or 'Financial Results' in title:
+                    pr_id = item.get('ID')
+                    at_id = None
+                    filename = None
+                    for at in attachments:
+                        if at.get('prID') == pr_id:
+                            at_id = at.get('atID')
+                            filename = at.get('filename')
+                            break
+                    term = 'FY '
+                    qm = re.search(r'(20\d{2})', title)
+                    year = qm.group(1) if qm else '2026'
+                    if any(x in title for x in ['第一季度', '一季度', 'Q1']):
+                        term = 'Q1 '
+                    elif any(x in title for x in ['第二季度', '半年度', '中期', 'Q2']):
+                        term = 'Q2 '
+                    elif any(x in title for x in ['第三季度', '三季度', 'Q3']):
+                        term = 'Q3 '
+                    target_quarter = f"{term}{year}"
+                    download_url = f"https://ea-cdn.eurolandir.com/press-releases-attachments./{at_id}/{filename}" if at_id else ""
+                    return target_quarter, True, [{'title': title, 'date': item.get('formatedDate', '')[:10], 'download_url': download_url, 'is_euroland': True, 'attributes': {'publishOn': item.get('formatedDate', ''), 'title': title}}]
+    except Exception as e:
+        print(f"    [Euroland IR] API check failed: {e}")
+    return '', False, []
+
 # ============================================================
 # Step 0: Quarter Discovery — determine latest earnings quarter
 # ============================================================
@@ -572,6 +641,12 @@ def discover_latest_quarter(ticker, company_name):
     """
     print(f"  [Step 0] Discovering latest quarter for {ticker}...")
     
+    if ticker.upper() == '0100.HK':
+        return _discover_minimax()
+    elif ticker.upper() == '2513.HK':
+        return _discover_euroland('hk-2513')
+    
+
     headers = {
         'x-rapidapi-host': 'seeking-alpha.p.rapidapi.com',
         'x-rapidapi-key': RAPIDAPI_KEY,
@@ -672,6 +747,48 @@ def fetch_transcript(ticker, target_quarter='', sa_items=None):
         target_quarter: e.g. "Q4 2025" — if set, only return transcript matching this quarter
         sa_items: pre-fetched SA API items from discover_latest_quarter() to avoid duplicate API call
     """
+    if sa_items and len(sa_items) > 0:
+        first = sa_items[0]
+        if first.get('is_minimax') or first.get('is_euroland'):
+            cn_map = {'0100.HK': 'MiniMax', '2513.HK': '智谱AI'}
+            name = cn_map.get(ticker.upper(), ticker)
+            print(f"    [Custom IR] Fetching {name} '{target_quarter}' transcript proxy via Tavily...")
+            
+            if TAVILY_API_KEY:
+                query = f'"{name}" "业绩会" OR "电话会议" OR "会议纪要" "{target_quarter}"'
+                try:
+                    tavily_resp = requests.post(
+                        'https://api.tavily.com/search',
+                        json={'api_key': TAVILY_API_KEY, 'query': query,
+                              'max_results': 5, 'search_depth': 'advanced', 'include_answer': True},
+                        timeout=20
+                    )
+                    tavily_resp.raise_for_status()
+                    answer = tavily_resp.json().get('answer', '')
+                    content = "【TAVILY SEARCH PROXY TRANSCRIPT】\n本部分为网页搜索合成的管理层问答与战略视角纪要：\n" + answer + "\n\n"
+                    for r in tavily_resp.json().get('results', []):
+                        content += f"Source: {r.get('title')}\n{r.get('content')}\n\n"
+                    
+                    print(f"    [Custom IR] Fetched {len(content)} chars via Tavily proxy.")
+                    return {
+                        'title': first.get('title', ''), 
+                        'date': first.get('date', ''), 
+                        'quarter': target_quarter, 
+                        'content': content, 
+                        'id': f"proxy_{ticker}"
+                    }
+                except Exception as e:
+                    print(f"    [Custom IR] Tavily search proxy failed: {e}")
+                    
+            print("    [Custom IR] Returning empty proxy transcript.")
+            return {
+                'title': first.get('title', ''), 
+                'date': first.get('date', ''), 
+                'quarter': target_quarter, 
+                'content': "【系统提示】没有找到该公司的详细文字实录或代理搜索失败。", 
+                'id': f"proxy_{ticker}"
+            }
+
     headers = {
         'x-rapidapi-host': 'seeking-alpha.p.rapidapi.com',
         'x-rapidapi-key': RAPIDAPI_KEY,
@@ -1132,14 +1249,55 @@ def fetch_ir_press_release(ticker):
 # ============================================================
 # Step 3: Quarterly Data (IR Scraper → Tavily → yfinance)
 # ============================================================
-def collect_quarterly_data(company_name, ticker, quarter):
+def collect_quarterly_data(company_name, ticker, quarter, sa_items=None):
     print(f"    [Data] Collecting quarterly financials for {ticker}...")
     result = {'data': {}, 'metadata': {}, 'press_release_url': '', 'raw_pr_content': ''}
     
     pr_content = ""
+
     
+    # Source 0: Custom APIs from Step 0
+    if sa_items and len(sa_items) > 0:
+        first = sa_items[0]
+        if first.get('is_minimax'):
+            slug = first.get('slug')
+            if slug:
+                url = f"https://www.minimax.io/news/{slug}"
+                print(f"    [IR] Scraping Minimax PR from {url}...")
+                try:
+                    resp = requests.get(url, timeout=15)
+                    resp.raise_for_status()
+                    html = resp.text
+                    # The user suggests /html/body/main/div[2] and [4] but we can just use bs4 to extract all text or common tags
+                    soup = BeautifulSoup(html, 'html.parser')
+                    main_content = soup.find('main')
+                    if main_content:
+                        pr_content = main_content.get_text(separator='\n', strip=True)
+                        result['press_release_url'] = url
+                except Exception as e:
+                    print(f"    [IR] Minimax fetch failed: {e}")
+        elif first.get('is_euroland'):
+            pdf_url = first.get('download_url')
+            if pdf_url:
+                print(f"    [IR] Downloading Euroland PDF from {pdf_url}...")
+                try:
+                    import pdfplumber
+                    import io
+                    resp = requests.get(pdf_url, timeout=20)
+                    resp.raise_for_status()
+                    with pdfplumber.open(io.BytesIO(resp.content)) as pdf:
+                        text_parts = []
+                        for page in pdf.pages:
+                            text = page.extract_text()
+                            if text:
+                                text_parts.append(text)
+                        pr_content = '\n'.join(text_parts)
+                        result['press_release_url'] = pdf_url
+                except Exception as e:
+                    print(f"    [IR] Euroland PDF fetch failed: {e}")
+
     # Source 1 (Priority): Direct IR page scraper
-    if ticker in _IR_CONFIGS:
+    if not pr_content and ticker in _IR_CONFIGS:
         ir_text, ir_url = fetch_ir_press_release(ticker)
         if ir_text:
             pr_content = ir_text
@@ -1954,13 +2112,13 @@ def run_earnings_pipeline(companies, query="", output_dir=None, transcript_file=
             with open(press_release_file, 'r', encoding='utf-8') as f:
                 pr_content = f.read()
             print(f"  ✓ Using user-provided press release ({len(pr_content):,} chars)")
-            qd = collect_quarterly_data(name, ticker, quarter)
+            qd = collect_quarterly_data(name, ticker, quarter, sa_items)
             if qd:
                 qd['raw_pr_content'] = pr_content
             else:
                 qd = {'data': {}, 'raw_pr_content': pr_content, 'metadata': {'source': 'user_press_release'}}
         else:
-            qd = collect_quarterly_data(name, ticker, quarter)
+            qd = collect_quarterly_data(name, ticker, quarter, sa_items)
         if qd and qd.get('data'):
             print(f"  Data source: {qd.get('metadata', {}).get('source', '?')}")
         
