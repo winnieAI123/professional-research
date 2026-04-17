@@ -240,6 +240,11 @@ Just the ticker or NONE, nothing else."""
 
 def _try_resolve_cn_ticker(company_name: str) -> str:
     """Check if company is CN-listed via EastMoney search."""
+    # Guard: pure-English uppercase 1-5 chars is a US ticker (TSM/AAPL/...).
+    # EastMoney's suggest API will fuzzy-match English to A-share codes
+    # (e.g. TSM → 600091 神奇制药), so refuse English input outright.
+    if re.match(r'^[A-Z]{1,5}$', company_name):
+        return None
     try:
         url = "https://searchapi.eastmoney.com/api/suggest/get"
         params = {

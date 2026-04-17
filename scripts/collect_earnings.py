@@ -521,6 +521,15 @@ def _resolve_sa_ticker(company_name, detect_ticker):
     Resolve the correct Seeking Alpha ticker for transcript search.
     Returns (ticker, reporting_currency).
     """
+    # Highest priority: company_name itself looks like a US ticker (TSM, AAPL, ...).
+    # detect_ticker may have been polluted by EastMoney fuzzy match (TSM → 600091),
+    # so trust the original input over the detected ticker for pure-English input.
+    if company_name and re.match(r'^[A-Z]{1,6}$', company_name):
+        for cn_name, info in _CN_ADR_MAP.items():
+            if info['t'] == company_name:
+                return company_name, info['c']
+        return company_name, 'USD'
+
     # If detect_ticker is already a valid US ticker (alphabetic), use it
     if detect_ticker and re.match(r'^[A-Z]{1,6}$', detect_ticker):
         # Check if we have currency info
