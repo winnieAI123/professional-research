@@ -97,10 +97,83 @@ def load_watchlist():
 
 
 # ============================================================
-# Email Notification
+# Email Notification (ported from trending-tracker's robust impl)
 # ============================================================
+import ssl
+import socket
+
+SMTP_HOST = 'smtp.163.com'
+SMTP_PORT = 465
+
+
+def _resolve_smtp_host(hostname, logger):
+    """解析 SMTP 主机名，DNS 失败时降级到 DoH (DNS over HTTPS)"""
+    # 1. 尝试正常 DNS 解析
+    try:
+        socket.getaddrinfo(hostname, SMTP_PORT)
+        return hostname, False
+    except socket.gaierror:
+        logger.warning(f"  ⚠️ DNS 解析 {hostname} 失败，尝试 DoH 降级...")
+
+    # 2. 降级：通过 Google / Cloudflare DoH 获取 IP
+    import urllib.request
+    doh_urls = [
+        f"https://dns.google/resolve?name={hostname}&type=A",
+        f"https://cloudflare-dns.com/dns-query?name={hostname}&type=A",
+    ]
+    for doh_url in doh_urls:
+        try:
+            req = urllib.request.Request(doh_url, headers={"Accept": "application/dns-json"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read())
+                for ans in data.get("Answer", []):
+                    if ans.get("type") == 1:  # A record
+                        ip = ans["data"]
+                        logger.info(f"  ✅ DoH 解析成功: {hostname} -> {ip}")
+                        return ip, True
+        except Exception as e:
+            logger.warning(f"  DoH 请求失败 ({doh_url}): {e}")
+
+    raise RuntimeError(f"无法解析 {hostname}：DNS 和 DoH 均失败")
+
+
+def _smtp_connect(host, port, timeout, is_ip=False):
+    """建立 SMTP SSL 连接，IP 直连时使用正确的 SNI hostname"""
+    if not is_ip:
+        return smtplib.SMTP_SSL(host, port, timeout=timeout)
+
+    # IP 直连：手动建 socket，wrap_socket 时指定 server_hostname
+    ctx = ssl.create_default_context()
+    raw_sock = socket.create_connection((host, port), timeout=timeout)
+    ssl_sock = ctx.wrap_socket(raw_sock, server_hostname=SMTP_HOST)
+
+    server = smtplib.SMTP_SSL.__new__(smtplib.SMTP_SSL)
+    server.timeout = timeout
+    server.source_address = None
+    server._host = SMTP_HOST
+    server.context = ctx
+    server.sock = ssl_sock
+    server.file = None
+    server.debuglevel = 0
+    server._ehlo_resp = None
+    server._ehlo_or_helo_if_needed = smtplib.SMTP._ehlo_or_helo_if_needed.__get__(server)
+    # Read server greeting
+    server.file = server.sock.makefile('rb')
+    (code, msg) = server.getreply()
+    server.ehlo()
+    return server
+
+
 def send_email_notification(cn_name, ticker, quarter, report_path, logger):
-    """Send an email notification when a new earnings report is ready."""
+    """Send an email notification when a new earnings report is ready.
+    
+    Features (ported from trending-tracker):
+      - SMTP_SSL on port 465
+      - DNS -> DoH (Google/Cloudflare) fallback
+      - IP direct connect with correct SNI hostname
+      - 3x retry with 10s backoff
+      - 30s connection timeout
+    """
     sender = os.environ.get('EMAIL_SENDER', 'wangtian_winnie@163.com')
     password = os.environ.get('EMAIL_PASSWORD', '')
     # 默认发给自己（可用逗号分隔多个邮箱）
@@ -125,18 +198,32 @@ def send_email_notification(cn_name, ticker, quarter, report_path, logger):
     msg['To'] = receiver
     msg['Subject'] = subject
     msg.attach(MIMEText(body, 'plain', 'utf-8'))
-    
+
+    to_addrs = [r.strip() for r in receiver.split(',')]
+
+    # 解析 SMTP 主机（含 DoH 降级）
     try:
-        # 使用你跑通的 163 邮箱配置
-        server = smtplib.SMTP('smtp.163.com', 25)
-        server.login(sender, password)
-        # 支持发给多个接收人
-        to_addrs = [r.strip() for r in receiver.split(',')]
-        server.send_message(msg, to_addrs=to_addrs)
-        server.quit()
-        logger.info(f"  📧 邮件通知已发送至 {receiver}")
-    except Exception as e:
-        logger.error(f"  📧 邮件发送异常: {e}")
+        resolved_host, is_ip = _resolve_smtp_host(SMTP_HOST, logger)
+    except RuntimeError as e:
+        logger.error(f"  📧 {e}")
+        return
+
+    for attempt in range(1, 4):
+        try:
+            server = _smtp_connect(resolved_host, SMTP_PORT, timeout=30, is_ip=is_ip)
+            server.login(sender, password)
+            server.send_message(msg, to_addrs=to_addrs)
+            server.quit()
+            suffix = f" (DoH 降级: {resolved_host})" if is_ip else ""
+            logger.info(f"  📧 邮件通知已发送至 {receiver}{suffix}")
+            return
+        except Exception as e:
+            logger.error(f"  📧 邮件发送失败 (第 {attempt}/3 次尝试): {e}")
+            if attempt < 3:
+                logger.info("  等待 10 秒后重试...")
+                time.sleep(10)
+            else:
+                logger.error("  📧 邮件发送最终失败，放弃重试。")
 
 
 # ============================================================
@@ -304,7 +391,7 @@ def run_analysis(ticker, cn_name, output_dir, logger):
         if proc.returncode == 0:
             report_files = [
                 f for f in os.listdir(output_dir)
-                if f.endswith('_report.md') or f.endswith('_report.docx')
+                if f.endswith('.docx') or f.endswith('.md')
             ]
             report_path = os.path.join(output_dir, report_files[0]) if report_files else None
             logger.info(f'     ✅ 分析完成! 报告: {report_files}')

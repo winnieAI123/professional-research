@@ -14,7 +14,9 @@ import csv
 import os
 import json
 import re
+import time
 from datetime import datetime
+from functools import wraps
 
 from utils import read_config
 
@@ -35,10 +37,35 @@ HEADERS = {
     ),
 }
 
+def retry_with_backoff(max_retries=2, base_delay=5.0):
+    """Simple retry decorator with exponential backoff for network requests."""
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            retries = 0
+            while True:
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    retries += 1
+                    if retries > max_retries:
+                        raise e
+                    delay = base_delay * (2 ** (retries - 1))
+                    print(f"  [!] 请求失败 ({e}), {delay}s 后重试 {retries}/{max_retries}...")
+                    time.sleep(delay)
+        return wrapper
+    return decorator
+
 
 # ============================================================
 # 1. LMArena (arena.ai) — HTML table parsing
 # ============================================================
+@retry_with_backoff(max_retries=2, base_delay=5.0)
+def _fetch_lmarena_category(url: str) -> str:
+    resp = requests.get(url, headers=HEADERS, timeout=30)
+    resp.raise_for_status()
+    return resp.text
+
 def scrape_lmarena(date_str: str, data_dir: str) -> dict[str, list[dict]]:
     """Scrape all LMArena categories."""
     config = _get_config()
@@ -53,48 +80,21 @@ def scrape_lmarena(date_str: str, data_dir: str) -> dict[str, list[dict]]:
     all_data = {}
     for category, cat_info in categories.items():
         try:
-            url = f"{base_url}/{category}"
+            url = f"{base_url}/{cat_info.get('url_path', category)}"
             print(f"[LM] 请求: {url}")
-            resp = requests.get(url, headers=HEADERS, timeout=30)
-            resp.raise_for_status()
+            html = _fetch_lmarena_category(url)
 
-            soup = BeautifulSoup(resp.text, "html.parser")
+            soup = BeautifulSoup(html, "html.parser")
             table = soup.find("table")
             if not table:
                 raise RuntimeError(f"[{category}] 未找到排行榜表格")
 
             rows = table.find("tbody").find_all("tr")
-            results = []
-            for row in rows:
-                tds = row.find_all("td")
-                if len(tds) < cat_info["cols"]:
-                    continue
-
-                rank_spans = tds[1].find_all("span")
-                if len(rank_spans) >= 2:
-                    rank_lower = _safe_int(rank_spans[0].get_text(strip=True))
-                    rank_upper = _safe_int(rank_spans[1].get_text(strip=True))
-                else:
-                    raw = tds[1].get_text(strip=True)
-                    rank_lower = raw
-                    rank_upper = raw
-
-                score = tds[3].get_text(strip=True).replace("Preliminary", "").strip()
-
-                entry = {
-                    "rank": _safe_int(tds[0].get_text(strip=True)),
-                    "rank_lower": rank_lower,
-                    "rank_upper": rank_upper,
-                    "model": _parse_model_name(tds[2]),
-                    "score": score,
-                    "votes": _safe_int(tds[4].get_text(strip=True).replace(",", "")),
-                }
-
-                if cat_info["cols"] >= 7:
-                    entry["price_per_1m_tokens"] = tds[5].get_text(strip=True)
-                    entry["context_length"] = tds[6].get_text(strip=True)
-
-                results.append(entry)
+            
+            if category.endswith("-by-labs"):
+                results = _parse_lmarena_labs_rows(rows)
+            else:
+                results = _parse_lmarena_model_rows(rows, cat_info)
 
             safe_name = category.replace("-", "_")
             all_data[safe_name] = results
@@ -111,9 +111,84 @@ def scrape_lmarena(date_str: str, data_dir: str) -> dict[str, list[dict]]:
     return all_data
 
 
+def _parse_lmarena_model_rows(rows, cat_info) -> list[dict]:
+    results = []
+    for row in rows:
+        tds = row.find_all("td")
+        if len(tds) < cat_info["cols"]:
+            continue
+
+        rank_spans = tds[1].find_all("span")
+        if len(rank_spans) >= 2:
+            rank_lower = _safe_int(rank_spans[0].get_text(strip=True))
+            rank_upper = _safe_int(rank_spans[1].get_text(strip=True))
+        else:
+            raw = tds[1].get_text(strip=True)
+            rank_lower = raw
+            rank_upper = raw
+
+        score = tds[3].get_text(strip=True).replace("Preliminary", "").strip()
+
+        entry = {
+            "rank": _safe_int(tds[0].get_text(strip=True)),
+            "rank_lower": rank_lower,
+            "rank_upper": rank_upper,
+            "model": _parse_model_name(tds[2]),
+            "score": score,
+            "votes": _safe_int(tds[4].get_text(strip=True).replace(",", "")),
+        }
+
+        if cat_info["cols"] >= 7:
+            entry["price_per_1m_tokens"] = tds[5].get_text(strip=True)
+            entry["context_length"] = tds[6].get_text(strip=True)
+
+        results.append(entry)
+    return results
+
+
+def _parse_lmarena_labs_rows(rows) -> list[dict]:
+    results = []
+    for row in rows:
+        tds = row.find_all("td")
+        if len(tds) < 5:
+            continue
+        spans = tds[1].find_all("span")
+        if not spans:
+            continue
+        lab_name = spans[0].get_text(strip=True)
+        if not lab_name:
+            continue
+        top_model = spans[1].get_text(strip=True).replace("· Proprietary", "").strip() if len(spans) > 1 else ""
+
+        score_raw = tds[2].get_text(" ", strip=True).replace("Preliminary", "").strip()
+        score = re.sub(r"\s+", "", score_raw)
+
+        spread_text = tds[4].get_text(" ", strip=True)
+        spread_parts = spread_text.split()
+
+        results.append({
+            "rank": _safe_int(tds[0].get_text(strip=True)),
+            "model": lab_name, 
+            "score": score, 
+            "top_model": top_model,
+            "top_model_rank": _safe_int(tds[3].get_text(strip=True)),
+            "rank_spread": spread_text,
+            "rank_spread_min": _safe_int(spread_parts[0]) if len(spread_parts) >= 1 else None,
+            "rank_spread_max": _safe_int(spread_parts[-1]) if len(spread_parts) >= 1 else None,
+        })
+    return results
+
+
 # ============================================================
 # 2. ArtificialAnalysis.ai — Next.js RSC flight
 # ============================================================
+@retry_with_backoff(max_retries=2, base_delay=5.0)
+def _fetch_aa_rsc(url: str, page_path: str) -> str:
+    headers = {**HEADERS, "RSC": "1", "Next-Url": page_path}
+    resp = requests.get(url, headers=headers, timeout=30)
+    resp.raise_for_status()
+    return resp.text
+
 def scrape_artificial_analysis(date_str: str, data_dir: str) -> dict[str, list[dict]]:
     """Scrape all AA categories via RSC flight requests."""
     config = _get_config()
@@ -129,12 +204,10 @@ def scrape_artificial_analysis(date_str: str, data_dir: str) -> dict[str, list[d
     for track_key, page_path in rsc_pages.items():
         try:
             url = f"{base_url}{page_path}"
-            headers = {**HEADERS, "RSC": "1", "Next-Url": page_path}
             print(f"[AA] 请求: {url}")
-            resp = requests.get(url, headers=headers, timeout=30)
-            resp.raise_for_status()
-
-            models = _parse_rsc_flight(resp.text)
+            text = _fetch_aa_rsc(url, page_path)
+            
+            models = _parse_rsc_flight(text)
             all_data[track_key] = models
 
             csv_path = os.path.join(data_dir, f"aa_{track_key}_{date_str}.csv")
@@ -157,7 +230,7 @@ def scrape_superclue(date_str: str, data_dir: str) -> dict[str, list[dict]]:
     sc_config = config["sources"]["superclue"]
     base_url = sc_config["base_url"]
     cat_order = sc_config["category_order"]
-    cat_labels = sc_config["category_labels"]
+    cat_labels = sc_config.get("category_labels", {})
 
     print(f"\n{'='*60}")
     print(f"  [3/3] SuperCLUE Arena")
@@ -167,7 +240,7 @@ def scrape_superclue(date_str: str, data_dir: str) -> dict[str, list[dict]]:
         # Get vue-vendor JS URL
         resp = requests.get(base_url, headers=HEADERS, timeout=15)
         resp.raise_for_status()
-        match = re.search(r'/assets/(vue-vendor-[A-Za-z0-9]+\.js)', resp.text)
+        match = re.search(r'/assets/(vue-vendor-[A-Za-z0-9_-]+\.js)', resp.text)
         if not match:
             raise RuntimeError("无法在 SuperCLUE 首页找到 vue-vendor JS 路径")
         vendor_url = f"{base_url}/assets/{match.group(1)}"
@@ -192,6 +265,8 @@ def scrape_superclue(date_str: str, data_dir: str) -> dict[str, list[dict]]:
         all_data = {}
         for i, group in enumerate(cat_groups):
             cat_name = cat_order[i] if i < len(cat_order) else f"unknown_{i}"
+            _sc_sanity_check(cat_name, group)
+            
             all_data[cat_name] = group
 
             csv_path = os.path.join(data_dir, f"sc_{cat_name}_{date_str}.csv")
@@ -204,6 +279,32 @@ def scrape_superclue(date_str: str, data_dir: str) -> dict[str, list[dict]]:
     except Exception as e:
         print(f"  [!] SuperCLUE 失败: {e}")
         return {}
+
+
+_SC_CATEGORY_KEYWORDS = {
+    "text_to_image":  ["flux", "imagen", "gpt-image", "nano-banana", "nano banana", "seedream", "dall-e", "qwen-image", "midjourney", "firefly"],
+    "text_to_video":  ["seedance", "sora", "runway gen", "wan", "cogvideo", "vidu q3"],
+    "image_to_video": ["kling", "可灵", "veo", "pixverse", "dreamina", "gen-3", "gen-4", "hailuo", "luma"],
+    "text_to_speech": ["tts", "speech", "voice", "语音", "azure neural", "doubao-seed-tts"],
+    "ref_to_video":   ["vidu q2", "vivago", "pika", "kling 1", "可灵 1"],
+    "web_coding":     ["glm", "qwen3", "kimi", "claude", "gpt-5", "deepseek", "gemini-3"],
+}
+
+def _sc_sanity_check(name: str, group: list[dict]) -> None:
+    if name not in _SC_CATEGORY_KEYWORDS:
+        return
+    top5 = [str(e.get("model", "")).lower() for e in group[:5]]
+    if not top5:
+        return
+    scores = {}
+    for cat, kws in _SC_CATEGORY_KEYWORDS.items():
+        scores[cat] = sum(1 for m in top5 for kw in kws if kw in m)
+    best_cat = max(scores, key=scores.get) if scores else name
+    if scores.get(best_cat, 0) >= 2 and best_cat != name and scores[best_cat] > scores.get(name, 0):
+        print(
+            f"  [WARNING] SuperCLUE 类别疑似错配: {name} 数据像 {best_cat}。 "
+            f"Top5={top5}，请检查 config_order。"
+        )
 
 
 # ============================================================
@@ -259,7 +360,7 @@ def scrape_all_sources(date_str: str, data_dir: str,
 
 
 # ============================================================
-# Internal helpers — LMArena
+# Internal helpers
 # ============================================================
 def _parse_model_name(td) -> str:
     link = td.find("a")
@@ -275,53 +376,44 @@ def _parse_model_name(td) -> str:
     return filtered[1] if len(filtered) >= 2 else (filtered[0] if filtered else td.get_text(strip=True))
 
 
-def _safe_int(s: str) -> int | str:
+def _safe_int(s):
     try:
-        return int(s.replace(",", ""))
+        return int(str(s).replace(",", ""))
     except (ValueError, AttributeError):
         return s
 
 
-# ============================================================
-# Internal helpers — ArtificialAnalysis RSC
-# ============================================================
 def _parse_rsc_flight(text: str) -> list[dict]:
-    lines = text.split("\n")
-    for line in lines:
+    for line in text.split("\n"):
         if '"rank"' not in line or '"elo"' not in line:
             continue
         if '"formatted"' not in line or '"values"' not in line:
             continue
-
-        match = re.match(r'[\da-f]+:(.*)', line, re.DOTALL)
-        if not match:
+        m = re.match(r"[\da-f]+:(.*)", line, re.DOTALL)
+        if not m:
             continue
-
-        json_str = match.group(1)
         try:
-            data = json.loads(json_str)
+            data = json.loads(m.group(1))
         except json.JSONDecodeError:
             continue
 
         entries = []
         _find_rsc_entries(data, entries)
+        if not entries:
+            continue
 
-        if entries:
-            seen_ids = set()
-            unique_entries = []
-            for e in entries:
-                model_id = e.get("values", {}).get("id", "")
-                if model_id and model_id not in seen_ids:
-                    seen_ids.add(model_id)
-                    unique_entries.append(e)
-                elif not model_id:
-                    unique_entries.append(e)
-
-            unique_entries.sort(
-                key=lambda e: e.get("formatted", {}).get("rank", 9999)
-            )
-            return [_normalize_rsc_entry(e) for e in unique_entries]
-
+        seen = set()
+        unique = []
+        for e in entries:
+            mid = e.get("values", {}).get("id", "")
+            if mid and mid in seen:
+                continue
+            if mid:
+                seen.add(mid)
+            unique.append(e)
+            
+        unique.sort(key=lambda e: e.get("formatted", {}).get("rank", 9999))
+        return [_normalize_rsc_entry(e) for e in unique]
     return []
 
 
@@ -354,12 +446,10 @@ def _normalize_rsc_entry(entry: dict) -> dict:
         "win_rate": round(vals.get("winRate", 0) * 100, 1),
         "is_open_weights": vals.get("openWeightsUrl") is not None,
         "is_current": vals.get("isCurrent", False),
+        "is_first_party": vals.get("isFirstPartyFoundational", False),
     }
 
 
-# ============================================================
-# Internal helpers — SuperCLUE
-# ============================================================
 def _extract_sc_inline_entries(js: str) -> list[dict]:
     entries = []
     pattern = r'\{rank:\d+,model:"[^"]+",org:"[^"]+",median:[\d.]+'
@@ -408,9 +498,6 @@ def _save_sc_csv(results: list[dict], path: str):
         writer.writerows(results)
 
 
-# ============================================================
-# Shared helpers
-# ============================================================
 def _save_csv(results: list[dict], path: str):
     if not results:
         return
