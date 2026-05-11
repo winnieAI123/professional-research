@@ -29,11 +29,12 @@ GEMINI_API_KEY = get_api_key("GEMINI_API_KEY")
 TAVILY_API_KEY = get_api_key("TAVILY_API_KEY")
 
 from google import genai
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 
 
 # ============================================================
-# LLM Call with 4-Model Fallback
+# LLM Call with 4-Model Fallback + DeepSeek Backup
 # ============================================================
 MODEL_CHAIN = [
     'gemini-3-pro-preview',
@@ -41,6 +42,50 @@ MODEL_CHAIN = [
     'gemini-3.1-pro-preview',
     'gemini-2.5-pro',
 ]
+
+GEMINI_CALL_TIMEOUT_SEC = 90  # hard timeout per attempt; Gemini 3 Pro on long context can hang silently
+
+
+_deepseek_cached = None  # (client, model) tuple or False if unavailable
+
+def _load_deepseek():
+    """Lazy-load DeepSeek (OpenAI-compatible) client from earnings-digest .env. Returns (client, model) or (None, None)."""
+    global _deepseek_cached
+    if _deepseek_cached is not None:
+        return _deepseek_cached if _deepseek_cached else (None, None)
+    env_path = os.path.expanduser('~/Projects/PlayGround/earnings-digest/.env')
+    key = os.environ.get('DEEPSEEK_API_KEY', '')
+    base = os.environ.get('DEEPSEEK_BASE_URL', 'https://api.deepseek.com')
+    model = os.environ.get('DEEPSEEK_MODEL', 'deepseek-v4-flash')
+    if not key and os.path.exists(env_path):
+        try:
+            with open(env_path, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith('#') or '=' not in line:
+                        continue
+                    k, v = line.split('=', 1)
+                    k = k.strip(); v = v.strip().strip('"').strip("'")
+                    if k == 'DEEPSEEK_API_KEY' and not key:
+                        key = v
+                    elif k == 'DEEPSEEK_BASE_URL':
+                        base = v
+                    elif k == 'DEEPSEEK_MODEL':
+                        model = v
+        except Exception as e:
+            print(f"      [deepseek] failed to read .env: {e}")
+    if not key:
+        _deepseek_cached = False
+        return (None, None)
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=key, base_url=base)
+        _deepseek_cached = (client, model)
+        return _deepseek_cached
+    except Exception as e:
+        print(f"      [deepseek] init failed: {e}")
+        _deepseek_cached = False
+        return (None, None)
 
 def _fmt_num(val, currency=''):
     """Format raw numbers: 17200000000 -> $17.2B, 8900000000 -> $8.9B"""
@@ -389,14 +434,38 @@ def _build_multi_quarter_context(prior1_data, prior2_data=None):
     return '\n'.join(sections)
 
 
+def _gemini_generate(model, prompt, temperature, max_tokens):
+    return gemini_client.models.generate_content(
+        model=model, contents=prompt,
+        config={'temperature': temperature, 'max_output_tokens': max_tokens}
+    )
+
+
+def _call_with_timeout(fn, timeout_sec):
+    """Run fn() with hard timeout. On timeout, abandon the worker thread (it may keep running)."""
+    ex = ThreadPoolExecutor(max_workers=1)
+    fut = ex.submit(fn)
+    try:
+        result = fut.result(timeout=timeout_sec)
+        ex.shutdown(wait=False)
+        return result, False  # (result, timed_out)
+    except FuturesTimeoutError:
+        fut.cancel()
+        ex.shutdown(wait=False)  # do NOT block on hung HTTP call
+        return None, True
+
+
 def _llm_call(prompt, max_tokens=8000, temperature=0.2, tag=""):
     for model in MODEL_CHAIN:
         for attempt in range(2):
             try:
-                resp = gemini_client.models.generate_content(
-                    model=model, contents=prompt,
-                    config={'temperature': temperature, 'max_output_tokens': max_tokens}
+                resp, timed_out = _call_with_timeout(
+                    lambda: _gemini_generate(model, prompt, temperature, max_tokens),
+                    GEMINI_CALL_TIMEOUT_SEC,
                 )
+                if timed_out:
+                    print(f"      [{tag}] {model} #{attempt+1}: HARD TIMEOUT after {GEMINI_CALL_TIMEOUT_SEC}s, next...")
+                    continue
                 if resp and resp.text:
                     # Check finish_reason for truncation/safety issues
                     finish_reason = None
@@ -435,7 +504,35 @@ def _llm_call(prompt, max_tokens=8000, temperature=0.2, tag=""):
                 else:
                     print(f"      [{tag}] {model} err: {e}")
                     time.sleep(2)
-    print(f"      [{tag}] ALL MODELS FAILED")
+    print(f"      [{tag}] ALL GEMINI MODELS FAILED — falling back to DeepSeek...")
+    ds_client, ds_model = _load_deepseek()
+    if ds_client is None:
+        print(f"      [{tag}] DeepSeek unavailable (no API key), giving up.")
+        return ""
+    for attempt in range(2):
+        try:
+            resp, timed_out = _call_with_timeout(
+                lambda: ds_client.chat.completions.create(
+                    model=ds_model,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                ),
+                GEMINI_CALL_TIMEOUT_SEC,
+            )
+            if timed_out:
+                print(f"      [{tag}] deepseek #{attempt+1}: HARD TIMEOUT after {GEMINI_CALL_TIMEOUT_SEC}s")
+                continue
+            text = (resp.choices[0].message.content or "").strip()
+            text = _clean_llm(text)
+            if len(text) >= 200 or max_tokens < 1000:
+                print(f"      [{tag}] OK via deepseek/{ds_model} ({len(text)} chars)")
+                return text
+            print(f"      [{tag}] deepseek output only {len(text)} chars — retrying...")
+        except Exception as e:
+            print(f"      [{tag}] deepseek err #{attempt+1}: {e}")
+            time.sleep(2)
+    print(f"      [{tag}] ALL MODELS FAILED (incl. DeepSeek)")
     return ""
 
 
