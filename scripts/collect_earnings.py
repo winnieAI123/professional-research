@@ -842,6 +842,55 @@ def discover_latest_quarter(ticker, company_name):
     return target_quarter, transcript_available, sa_items
 
 
+SA_PREMIUM_COOKIE = os.environ.get("SA_PREMIUM_COOKIE", "")
+
+
+def _fetch_sa_premium_html(transcript_id):
+    """Fetch full transcript HTML directly from SA website using Premium cookies.
+
+    Requires SA_PREMIUM_COOKIE env var. The sa-mpw-data header unlocks paywalled content.
+    Cookie _px3 expires in ~15 min, so this only works shortly after browser export.
+    """
+    if not SA_PREMIUM_COOKIE:
+        return None
+    cookies = {}
+    for pair in SA_PREMIUM_COOKIE.split(";"):
+        pair = pair.strip()
+        if "=" in pair:
+            k, v = pair.split("=", 1)
+            cookies[k.strip()] = v.strip()
+    article_path = f"/article/{transcript_id}"
+    try:
+        resp = requests.get(
+            f"https://seekingalpha.com/api/v3/articles/{transcript_id}",
+            params={"include": "author,primaryTickers,secondaryTickers", "lang": "en"},
+            headers={
+                "accept": "application/json",
+                "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                              "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+                "referer": f"https://seekingalpha.com{article_path}",
+                "sa-mpw-data": f'{{"url":"{article_path}","query":"","page_key":"auto"}}',
+                "sec-fetch-dest": "empty",
+                "sec-fetch-mode": "cors",
+                "sec-fetch-site": "same-origin",
+            },
+            cookies=cookies,
+            timeout=30,
+        )
+        if resp.status_code != 200:
+            print(f"    [SA Premium] returned {resp.status_code} (cookie likely expired)")
+            return None
+        html = resp.json().get("data", {}).get("attributes", {}).get("content", "")
+        if html and len(html) >= 10000:
+            print(f"    [SA Premium] got {len(html)} chars (full transcript)")
+            return html
+        print(f"    [SA Premium] content too short ({len(html)} chars), skipping")
+        return None
+    except Exception as e:
+        print(f"    [SA Premium] failed: {e}")
+        return None
+
+
 # ============================================================
 # Step 1: Fetch Transcript (Seeking Alpha)
 # ============================================================
@@ -971,7 +1020,7 @@ def fetch_transcript(ticker, target_quarter='', sa_items=None):
     
     print(f"    OK: {title} ({publish_date})")
     print(f"    [SA] Fetching content (id={tid})...")
-    
+
     try:
         resp = requests.get(
             'https://seeking-alpha.p.rapidapi.com/transcripts/v2/get-details',
@@ -981,11 +1030,17 @@ def fetch_transcript(ticker, target_quarter='', sa_items=None):
         html = resp.json().get('data', {}).get('attributes', {}).get('content', '')
     except Exception as e:
         print(f"    x Fetch failed: {e}")
-        return None
-    
+        html = ''
+
+    # SA Premium fallback: if RapidAPI returned truncated content, try direct SA API
+    if len(html or '') < 10000:
+        premium_html = _fetch_sa_premium_html(tid)
+        if premium_html and len(premium_html) > len(html or ''):
+            html = premium_html
+
     if not html:
         return None
-    
+
     soup = BeautifulSoup(html, 'html.parser')
     parts = []
     speaker = None
@@ -1006,7 +1061,7 @@ def fetch_transcript(ticker, target_quarter='', sa_items=None):
             speaker = None
         else:
             parts.append(txt)
-    
+
     text = '\n'.join(parts)
     print(f"    OK: {len(text)} chars")
     return {'title': title, 'date': publish_date, 'quarter': quarter, 'content': text, 'id': tid}
