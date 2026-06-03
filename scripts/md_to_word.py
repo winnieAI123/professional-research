@@ -25,7 +25,7 @@ try:
     from docx.enum.text import WD_ALIGN_PARAGRAPH
     from docx.enum.table import WD_TABLE_ALIGNMENT
     from docx.oxml.ns import qn, nsdecls
-    from docx.oxml import parse_xml
+    from docx.oxml import parse_xml, OxmlElement
 except ImportError:
     print("Error: python-docx not installed. Run: python -m pip install python-docx")
     sys.exit(1)
@@ -332,6 +332,18 @@ def add_styled_table(doc, data):
     table.style = 'Table Grid'
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
 
+    # Enable autofit so user can manually drag column widths in Word
+    table.autofit = True
+    table.allow_autofit = True
+    tblPr = table._tbl.find(qn('w:tblPr'))
+    if tblPr is not None:
+        existing_layout = tblPr.find(qn('w:tblLayout'))
+        if existing_layout is not None:
+            tblPr.remove(existing_layout)
+        tblLayout = OxmlElement('w:tblLayout')
+        tblLayout.set(qn('w:type'), 'autofit')
+        tblPr.append(tblLayout)
+
     # Pre-detect which columns are numeric (check data rows, not header)
     numeric_cols = set()
     for row_data in data[1:]:
@@ -363,13 +375,14 @@ def add_styled_table(doc, data):
 
             # Style text
             for para in cell.paragraphs:
-                # Alignment: numeric columns right-aligned, first column left, others center
-                if i > 0 and j in numeric_cols:
+                # Alignment: first column always left (incl. header); numeric columns
+                # right-aligned; other headers/cells centered.
+                if j == 0:
+                    para.alignment = WD_ALIGN_PARAGRAPH.LEFT
+                elif i > 0 and j in numeric_cols:
                     para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
                 elif i == 0:
                     para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                elif j == 0:
-                    para.alignment = WD_ALIGN_PARAGRAPH.LEFT
                 else:
                     para.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
@@ -396,6 +409,15 @@ def add_styled_table(doc, data):
                     f'<w:shd {nsdecls("w")} w:fill="{ALT_ROW_COLOR}" w:val="clear"/>'
                 )
                 cell._tc.get_or_add_tcPr().append(shading)
+
+    # Clear fixed cell widths so columns can be manually resized in Word
+    for row in table.rows:
+        for cell in row.cells:
+            tcPr = cell._tc.get_or_add_tcPr()
+            tcW = tcPr.find(qn('w:tcW'))
+            if tcW is not None:
+                tcW.set(qn('w:type'), 'auto')
+                tcW.set(qn('w:w'), '0')
 
     return table
 
@@ -485,9 +507,16 @@ def parse_markdown(content):
 
         # Paragraph (collect consecutive non-empty lines)
         para_lines = []
-        while i < len(lines) and lines[i].strip() and not lines[i].startswith(('#', '|', '>', '-', '*', '+')):
-            # Check for list start
-            if re.match(r'^\d+\.\s+', lines[i].strip()):
+        while i < len(lines) and lines[i].strip():
+            stripped = lines[i].strip()
+            # Stop at heading / table / blockquote
+            if stripped.startswith(('#', '|', '>')):
+                break
+            # Stop at real list markers (require space after marker, so **bold** is NOT a list)
+            if re.match(r'^[\-\*\+]\s+', stripped) or re.match(r'^\d+\.\s+', stripped):
+                break
+            # Stop at horizontal rule
+            if re.match(r'^[\-\*_]{3,}$', stripped):
                 break
             para_lines.append(lines[i])
             i += 1

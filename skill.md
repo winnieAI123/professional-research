@@ -831,6 +831,94 @@ cd "C:/Users/wangtian/.claude/skills/professional-research" && python scripts/co
 >
 > **案例教训（2026-03-30）**：快手财报分析时跳过脚本直接用搜索写报告，被用户指出不够可信。而脚本自动生成的报告因 yfinance 挂掉有29个 N/A 字段。最终确认最优方案 = 脚本拿原文 + 搜索补充 + 自己写报告。
 
+**🔢 阶段3.5：数字审核 checklist（MANDATORY，写完报告后、交付前）**
+
+> 🛑 **写完报告 ≠ 可以交付。** 在转 Word 并发给用户之前，必须执行下面这套数字核对流程。任何一项 ✗ 必须先修复再交付。
+
+**执行步骤：**
+
+1. **提取所有数字** — 用 grep 把 .md 报告里所有以下模式的数字打印出来：
+   ```bash
+   grep -oE '(RMB|¥|US\$|\$|USD)[ ]?[0-9][0-9,.]*[ ]?(亿|万亿|千亿|million|billion|M|B)?' {TICKER}_report.md
+   grep -oE '[+\-]?[0-9]+(\.[0-9]+)?%' {TICKER}_report.md
+   ```
+   外加：所有 EPS、毛利率/经营利润率/净利率、市场份额、用户/订单/GMV 等 KPI。
+
+2. **逐项核对来源** — 对每个数字打 ✓/✗，源头按优先级：
+   - 财务数字（收入/利润/EPS/现金流/CapEx等） → `_press_release.txt` 第一，`_transcript.txt` 第二
+   - 管理层口径数据（指引/分业务增长口径） → `_transcript.txt`
+   - 分析师预期/Beat-Miss/目标价 → 阶段2的搜索结果（标注来源URL）
+   - 行业/竞品数据 → 阶段2.5补搜结果
+
+3. **重点核对的高风险陷阱**（每次都要扫一遍）：
+   - **单位换算**：
+     - `million ↔ 亿`：除以100（如 RMB 2,350M = RMB 23.5亿，不是 2,350亿）
+     - `billion ↔ 亿`：乘以10（如 RMB 380 billion = RMB 3,800亿，**不是 380亿**）
+     - `billion ↔ 千亿`：除以10（如 RMB 380 billion = 3,800亿 = 3.8千亿）
+   - **口径混淆**：
+     - `consolidated net income` vs `net income attributable to ordinary shareholders` — 这是两个不同数字，别串用
+     - `GAAP` vs `Non-GAAP / Adjusted` — adjusted EBITDA 跟 GAAP operating income 不是一回事
+     - `reported` vs `like-for-like / ex-divestiture` — 剥离Sun Art/Intime后的 LFL 增速跟报表数不同
+     - `YoY` vs `QoQ` — 季度环比和同比的口径要分清
+   - **币种**：RMB 与 USD 数字混排时必须显式标注，禁止裸数字
+   - **财季归属**：日历Q vs 财年Q（BABA财年3月底结束，FY26 Q4 = 2026年1-3月日历Q1）
+
+4. **输出审核表** — 在内部 scratch 里生成一张表格（不需要给用户看），格式：
+
+   | # | 报告原文 | 期望值 | 来源 | ✓/✗ | 备注 |
+   |---|---------|-------|------|----|------|
+   | 1 | 总收入 RMB 2,434亿 | RMB 243.4 billion ÷ 10 = 2,434亿 | PR | ✓ | - |
+   | 2 | CapEx RMB 380亿 | CFO transcript: RMB 380 billion = 3,800亿 | Transcript | ✗ | **少一个零** |
+
+5. **任何 ✗ 必须修复**，修复后重新生成 .docx，再次执行第1-4步直到全 ✓。
+6. **审核完成后**，才能告诉用户"报告已交付"。
+
+**禁止事项：**
+- ❌ 不做审核直接交付（即便看上去都对）
+- ❌ 只抽样核对部分数字（必须全量）
+- ❌ "凭印象觉得对" 当作 ✓ — 必须明确指向原文行/搜索URL
+
+**案例教训（2026-05-14 BABA Q4 FY26）**：报告写"CapEx超出RMB 380亿原计划"，实际 transcript 原文是 "RMB 380 billion" = RMB 3,800亿（3.8 trillion），少写一个零，差 10 倍。如果有此 checklist，grep 出 "RMB 380亿" → 对照 transcript "RMB 380 billion" → 单位换算检查 → 立刻发现。
+
+---
+
+**🎙️ 阶段3.6：发言人归属审核 checklist（MANDATORY，多人业绩会场景）**
+
+> 🛑 **数字对了 ≠ 报告可交付。** 业绩会通常有 CEO/President + CFO 两人，写"管理层核心发言""核心 Q&A""战略进展引用"等章节时，每一条引用都必须按 transcript 实际段号核归属。这一步与 3.5 数字审核并列，缺一不可。
+
+**核心原则（地盘划分）：**
+- **定量财务数据 → CFO**：总营收、毛利率、分部收入、CapEx、研发费用、回购金额、季度交付的具体辆数/单数、预算金额、token 占比
+- **定性战略叙事 → CEO/President**：多年战略、技术路线、产品对标逻辑、海外潜力定性指引、用户画像分析
+- **Q&A 环节"Unknown Executive"出现时**：按上面"定量归 CFO、定性归 CEO"判断，**不要默认全归 CEO/President**
+
+**执行步骤：**
+
+1. **每条引用必须能指回 transcript 段号** — 写报告时每条 "**XXX（职位）**：" 引用，立刻在 transcript 里 grep 一段关键短语验证段号；不能验证的删掉或改成"管理层在业绩会上"的模糊语态
+
+2. **转 Word 前的强制 grep 自检**：
+   ```bash
+   # 检查 "CFO+人名" 是否对得上（防止"CFO 卢伟冰""CFO 王兴"这类常识错）
+   grep -nE "CFO [一-龥]+" {TICKER}_report.md
+   # 检查每条 "（CEO/CFO/总裁）" 引用的人名+职位组合
+   grep -nE "（(CFO|CEO|总裁|创始人|合伙人)" {TICKER}_report.md
+   # 抽查 3 条引用 → 去 transcript 里 grep 关键短语 → 段号必须能对上
+   ```
+
+3. **特别核校点**：
+   - **PR 文档里跨段数据不要错配**：press release 一个段落里的数据（如 EV 销售中心 X 家覆盖 Y 城），不要搬到另一个业务段（如 AIoT 海外）
+   - **"管理层在业绩会上表示"vs 具体人名**：不确定归属时用模糊语态，不要硬安人头
+   - **transcript 里 "Unknown Executive" / 含糊 speaker 字段**：必须按"地盘划分"判断，不能默认全归 CEO
+
+**红线：**
+- ❌ "听起来像 CEO 会说的"就归 CEO — 必须看 transcript 段号
+- ❌ 把 CFO 头衔挂到非 CFO 身上（如把"集团总裁"标成"CFO"）
+- ❌ 引用 "第 X 段" 写错段号 — 写完每条立刻 grep 验证
+- ✅ 归属错 = 报告作废，比格式错严重得多 — **慢一点没关系，但不能编**
+
+**案例教训（2026-05-27 小米 Q1 2026）**：报告里把 Alain Lam（CFO 林世伟）讲的 11 处发言（财务回顾、EV 亏损拆解、AI 预算、回购计划、Q&A 多个回答）全部错挂在卢伟冰名下；4 处直接写"CFO 卢伟冰"（卢伟冰是合伙人/总裁，不是 CFO）；还把 SimplyWall.st PR 里 EV 销售网络"490 centers / 143 cities"错配到 AIoT 海外段。两轮指正才修完。如果有此 checklist，第一轮 grep "CFO 卢伟冰" 就会跳出 4 条红线，避免错误流出。
+
+详见 memory：`reference_xiaomi_lu_weibing_title.md`、`feedback_earnings_report_speaker_attribution.md`
+
 ---
 
 **完整工作流（3 步，按顺序执行）**

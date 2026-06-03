@@ -27,6 +27,21 @@ from collect_financial_deep import get_api_key, detect_data_source
 RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY", "")
 TAVILY_API_KEY = get_api_key("TAVILY_API_KEY")
 
+# earnings-call-transcripts1 Pro API (Capital IQ-backed, full transcripts).
+# Primary transcript source — far more reliable than SA RapidAPI which
+# frequently 500s and truncates content.
+EC_HOST = "earnings-call-transcripts1.p.rapidapi.com"
+EC_BASE = f"https://{EC_HOST}/api/v1"
+# US ADR → HK numeric. EC Pro indexes Tencent/Meituan/Kuaishou/Xiaomi
+# under the HK primary listing, not the US ADR.
+_EC_TICKER_ALIAS = {
+    "TCEHY": "700",   # Tencent
+    "MPNGY": "3690",  # Meituan
+    "KUASF": "1024",  # Kuaishou
+    "XIACY": "1810",  # Xiaomi
+}
+QUARTER_RE = re.compile(r'Q(\d)\s+(\d{4})')
+
 
 
 
@@ -188,11 +203,78 @@ def _discover_euroland(companycode):
 # ============================================================
 # Step 0: Quarter Discovery — determine latest earnings quarter
 # ============================================================
+def _ec_search_earnings(ticker):
+    """Return recent earnings events from earnings-call-transcripts1 Pro.
+
+    Filters to exact-symbol matches with :US/:HK primary listing, event_type
+    'Earnings Calls' only, sorted newest first. Returns list of dicts:
+    {id, quarter, title, date}. Empty list on failure.
+    """
+    if not RAPIDAPI_KEY:
+        return []
+    search_ticker = _EC_TICKER_ALIAS.get(ticker.upper(), ticker)
+    expected_symbol = search_ticker.upper()
+    try:
+        r = requests.get(
+            f"{EC_BASE}/earnings/",
+            params={"ticker": search_ticker},
+            headers={"x-rapidapi-host": EC_HOST, "x-rapidapi-key": RAPIDAPI_KEY},
+            timeout=15,
+        )
+        if r.status_code != 200:
+            print(f"    [EC Pro] search returned {r.status_code}")
+            return []
+        items = r.json().get("data", [])
+    except Exception as e:
+        print(f"    [EC Pro] search failed: {e}")
+        return []
+    # ?ticker=JD also returns JDC, JDG — require exact stock_symbol match.
+    matched = [x for x in items if (x.get("stock_symbol") or "").upper() == expected_symbol]
+    if not matched:
+        return []
+    main_listing = [x for x in matched if (x.get("company_ticker") or "").endswith((":US", ":HK"))]
+    pool = main_listing if main_listing else matched
+    earnings = [x for x in pool if x.get("event_type") == "Earnings Calls"]
+    earnings.sort(key=lambda x: x.get("event_date_time", ""), reverse=True)
+    result = []
+    for x in earnings:
+        title = x.get("transcript_title", "")
+        qm = QUARTER_RE.search(title)
+        if not qm:
+            continue
+        result.append({
+            'id': str(x['id']),
+            'quarter': f"Q{qm.group(1)} {qm.group(2)}",
+            'title': title,
+            'date': (x.get("event_date_time") or "")[:10],
+        })
+    return result
+
+
+def _fetch_ec_pro_content(numeric_id):
+    """Fetch full transcript text from earnings-call-transcripts1 Pro."""
+    if not RAPIDAPI_KEY:
+        return ''
+    try:
+        r = requests.get(
+            f"{EC_BASE}/transcripts/{numeric_id}",
+            headers={"x-rapidapi-host": EC_HOST, "x-rapidapi-key": RAPIDAPI_KEY},
+            timeout=30,
+        )
+        if r.status_code != 200:
+            print(f"    [EC Pro] transcript {numeric_id} fetch returned {r.status_code}")
+            return ''
+        return r.json().get("data", {}).get("full_transcript_text", "") or ''
+    except Exception as e:
+        print(f"    [EC Pro] transcript {numeric_id} fetch failed: {e}")
+        return ''
+
+
 def discover_latest_quarter(ticker, company_name):
     """
     Determine the latest earnings quarter by checking SA API + IR page.
     Returns (target_quarter, sa_transcript_available, sa_items).
-    
+
     target_quarter: e.g. "Q4 2025"
     sa_transcript_available: True if SA has the transcript for target_quarter
     sa_items: raw SA API items for reuse by fetch_transcript()
@@ -203,16 +285,35 @@ def discover_latest_quarter(ticker, company_name):
         return _discover_minimax()
     elif ticker.upper() == '2513.HK':
         return _discover_euroland('hk-2513')
-    
+
+    # Priority 0: earnings-call-transcripts1 Pro (Capital IQ-backed, full transcripts).
+    # Returns ec_pro-flagged items that fetch_transcript() recognizes and pulls
+    # full text from. Skip SA list call entirely on hit — SA RapidAPI frequently
+    # 500s for these same tickers.
+    ec_items = _ec_search_earnings(ticker)
+    if ec_items:
+        latest = ec_items[0]
+        target_quarter = latest['quarter']
+        print(f"    [EC Pro] Found {len(ec_items)} earnings calls, latest: {target_quarter} ({latest['date']})")
+        print(f"    ✓ Latest quarter: {target_quarter} (transcript available on EC Pro)")
+        # Wrap as sa_items-shaped records so fetch_transcript can reuse without
+        # an extra API call. The __ec_pro flag signals "use EC Pro content fetch".
+        wrapped = [{
+            '__ec_pro': True,
+            'ec_id': it['id'],
+            'attributes': {'title': it['title'], 'publishOn': it['date']},
+        } for it in ec_items]
+        print(f"  [Step 0] Target quarter: {target_quarter}, EC Pro transcript: yes")
+        return target_quarter, True, wrapped
 
     headers = {
         'x-rapidapi-host': 'seeking-alpha.p.rapidapi.com',
         'x-rapidapi-key': RAPIDAPI_KEY,
     }
-    
+
     sa_items = []
     sa_quarters = []  # [(quarter_str, title, date, is_transcript), ...]
-    
+
     # 1. Check SA API for all recent items
     if RAPIDAPI_KEY:
         try:
@@ -280,10 +381,14 @@ def discover_latest_quarter(ticker, company_name):
             search_text = answer
             for r in tavily_resp.json().get('results', [])[:3]:
                 search_text += ' ' + r.get('title', '') + ' ' + r.get('content', '')[:200]
-            qm = re.search(r'Q(\d)\s+(\d{4})', search_text)
-            if qm:
-                latest_from_sa = f"Q{qm.group(1)} {qm.group(2)}"
-                print(f"    ✓ Tavily suggests latest quarter: {latest_from_sa}")
+            # Collect ALL quarter mentions and pick the latest by (year, quarter) desc.
+            # re.search picks first match — wrong when text mentions multiple quarters
+            # (e.g., "Q3 2025 ... Q1 2026" would resolve to Q3 2025).
+            all_q = re.findall(r'Q(\d)\s+(\d{4})', search_text)
+            if all_q:
+                all_q.sort(key=lambda m: (int(m[1]), int(m[0])), reverse=True)
+                latest_from_sa = f"Q{all_q[0][0]} {all_q[0][1]}"
+                print(f"    ✓ Tavily suggests latest quarter: {latest_from_sa} (from {len(all_q)} mentions)")
         except Exception as e:
             print(f"    [Tavily] Quarter discovery failed: {e}")
     
@@ -413,12 +518,61 @@ def fetch_transcript(ticker, target_quarter='', sa_items=None):
                     
             print("    [Custom IR] Returning empty proxy transcript.")
             return {
-                'title': first.get('title', ''), 
-                'date': first.get('date', ''), 
-                'quarter': target_quarter, 
-                'content': "【系统提示】没有找到该公司的详细文字实录或代理搜索失败。", 
+                'title': first.get('title', ''),
+                'date': first.get('date', ''),
+                'quarter': target_quarter,
+                'content': "【系统提示】没有找到该公司的详细文字实录或代理搜索失败。",
                 'id': f"proxy_{ticker}"
             }
+
+    # Priority 0: earnings-call-transcripts1 Pro
+    # Use pre-fetched sa_items from discover_latest_quarter when available;
+    # otherwise call EC Pro search directly. EC Pro returns full transcripts
+    # (~20-50k chars) without truncation — preferred over SA RapidAPI.
+    ec_items = []
+    if sa_items and sa_items[0].get('__ec_pro'):
+        ec_items = sa_items
+    else:
+        raw = _ec_search_earnings(ticker)
+        if raw:
+            ec_items = [{
+                '__ec_pro': True,
+                'ec_id': it['id'],
+                'attributes': {'title': it['title'], 'publishOn': it['date']},
+            } for it in raw]
+
+    if ec_items:
+        target_item = None
+        if target_quarter:
+            for it in ec_items:
+                if target_quarter in it['attributes'].get('title', ''):
+                    target_item = it
+                    break
+            if not target_item:
+                latest_title = ec_items[0]['attributes'].get('title', '')
+                print(f"    [EC Pro] no transcript for {target_quarter}, latest is: {latest_title[:60]}")
+        else:
+            target_item = ec_items[0]
+
+        if target_item:
+            ec_id = target_item['ec_id']
+            title = target_item['attributes'].get('title', '')
+            date = target_item['attributes'].get('publishOn', '')
+            qm = re.search(r'Q(\d)\s+(\d{4})', title)
+            quarter = f"Q{qm.group(1)} {qm.group(2)}" if qm else target_quarter
+            print(f"    [EC Pro] Fetching transcript id={ec_id} for {quarter}...")
+            text = _fetch_ec_pro_content(ec_id)
+            if text and len(text) >= 5000:
+                print(f"    ✓ EC Pro returned {len(text):,} chars (full transcript)")
+                return {'title': title, 'date': date, 'quarter': quarter,
+                        'content': text, 'id': f'ec-{ec_id}'}
+            print(f"    ⚠ EC Pro fetch returned only {len(text)} chars, falling through to SA")
+
+    # If sa_items came from discover_latest_quarter wrapped as EC Pro,
+    # clear them so SA path does a fresh fetch instead of treating EC Pro
+    # records as SA-shaped items.
+    if sa_items and sa_items[0].get('__ec_pro'):
+        sa_items = None
 
     headers = {
         'x-rapidapi-host': 'seeking-alpha.p.rapidapi.com',
@@ -551,8 +705,8 @@ _IR_CONFIGS = {
     },
     'JD': {
         'listing_url': 'https://ir.jd.com/zh-hans/quarterly-results',
-        'doc_pattern': r'system/files-encrypted/[^"\'>\s]+\.pdf',
-        'pdf_base': 'https://ir.jd.com/',
+        'doc_pattern': r'static-files/([a-f0-9-]+)',
+        'pdf_base': 'https://ir.jd.com/static-files/',
         'type': 'nasdaq_ir_cffi',
     },
     'MPNGY': {
@@ -583,10 +737,40 @@ _IR_CONFIGS = {
 }
 
 
-def fetch_ir_press_release(ticker):
+def _text_matches_quarter(text, target_quarter):
+    """Check if a PDF's TITLE/header matches target_quarter (e.g., 'Q1 2026').
+
+    Only inspects the first ~600 chars because a PR for Q1 2026 will
+    typically mention prior quarters (Q1 2025, Q4 2025) further down in
+    YoY/QoQ comparison tables — those mentions should not count as a match.
+    Returns True when target_quarter is empty/unparseable (cannot verify).
+    """
+    if not target_quarter:
+        return True
+    qm = re.match(r'Q(\d)\s+(\d{4})', target_quarter)
+    if not qm:
+        return True
+    q_num, q_year = qm.group(1), qm.group(2)
+    words = {'1': 'first', '2': 'second', '3': 'third', '4': 'fourth'}
+    patterns = [
+        f"q{q_num} {q_year}",
+        f"{words[q_num]} quarter of {q_year}",
+        f"{words[q_num]} quarter {q_year}",
+        f"{q_year}年第{['一', '二', '三', '四'][int(q_num)-1]}季度",
+    ]
+    header = text[:600].lower()
+    return any(p.lower() in header for p in patterns)
+
+
+def fetch_ir_press_release(ticker, target_quarter=''):
     """
     Fetch full press release text directly from company IR page.
     Returns (pr_text, pr_url) or (None, None).
+
+    target_quarter: optional quarter string (e.g., 'Q1 2026'). When provided,
+    for opaque-UUID URL schemes (nasdaq_ir / nasdaq_ir_cffi) the scraper
+    iterates candidates and verifies the extracted PDF text matches the
+    quarter — guards against the listing page ordering surprises.
     """
     config = _IR_CONFIGS.get(ticker)
     if not config:
@@ -623,26 +807,27 @@ def fetch_ir_press_release(ticker):
         pdf_url = None
         
         if config['type'] == 'baba':
-            # BABA: PDF URLs are directly in listing page JSON/HTML
-            # Find all ecms-files PDF URLs (press releases)
-            pdf_matches = re.findall(
-                r'ecms-files/[^"\'\\>\s]+\.pdf',
-                html
+            # BABA listing now uses JSON-embedded metadata with documentTitle.
+            # Parse title+PDF pairs and filter by title (URL is opaque UUID).
+            # Note: BABA's "quarterly-results" page typically only lists HK
+            # interim reports (semi-annual) + annual reports, NOT the US-style
+            # quarterly earnings PRs. So we usually return None and let the
+            # caller fall back to Tavily.
+            doc_pairs = re.findall(
+                r'"documentTitle":"([^"]+)"[\s\S]{0,800}?"pdf":"([^"]+\.pdf)"',
+                html,
             )
-            if pdf_matches:
-                # Filter for earnings/results PDFs, skip presentation slides
-                for pdf_path in pdf_matches:
-                    decoded = requests.utils.unquote(pdf_path)
-                    if any(kw in decoded.lower() for kw in ['announces', 'results', 'earnings']):
-                        pdf_url = f'https://data.alibabagroup.com/{pdf_path}'
-                        print(f"    [IR] Found earnings PDF: ...{decoded[-60:]}")
-                        break
-                if not pdf_url and pdf_matches:
-                    # Fallback: first PDF if no keyword match
-                    pdf_url = f'https://data.alibabagroup.com/{pdf_matches[0]}'
-                    print(f"    [IR] Using first PDF: ...{pdf_matches[0][-60:]}")
+            exclude_kw = ['interim report', 'annual report', 'esg', 'sustainability']
+            quarterly_titles = [
+                (t, u) for (t, u) in doc_pairs
+                if not any(x in t.lower() for x in exclude_kw)
+                and any(k in t.lower() for k in ['announces', 'press release', 'earnings'])
+            ]
+            if quarterly_titles:
+                title, pdf_url = quarterly_titles[0]
+                print(f"    [IR] BABA quarterly PR: {title[:60]}")
             else:
-                print(f"    [IR] No PDF links found on listing page")
+                print(f"    [IR] BABA listing page has no quarterly PRs (only interim/annual reports)")
                 return None, None
         
         elif config['type'] == 'meituan':
@@ -719,8 +904,13 @@ def fetch_ir_press_release(ticker):
             news_links = re.findall(r'href=["\']([^"\']*/news-release-details/[^"\']*/)["\']', html)
             if not news_links:
                 news_links = re.findall(r'href=["\']([^"\']*/news-release-details/[^"\']*)["\']', html)
-            earnings_kw = ['result', 'quarter', 'annual', 'fiscal']
-            earnings_links = [l for l in news_links if any(k in l.lower() for k in earnings_kw)]
+            # Earnings PR URLs always start with "baidu-announces-..." AND mention
+            # quarter/result. Non-earnings items (AGM notices, 20-F filings,
+            # buyback announcements) either lack "announces" or lack "quarter/result".
+            def _is_earnings_url(l):
+                low = l.lower()
+                return ('announce' in low) and any(k in low for k in ['result', 'quarter'])
+            earnings_links = [l for l in news_links if _is_earnings_url(l)]
             if not earnings_links:
                 print(f"    [IR] No earnings links found on Baidu listing")
                 return None, None
@@ -758,25 +948,61 @@ def fetch_ir_press_release(ticker):
                 return None, detail_url
         
         elif config['type'] in ('nasdaq_ir', 'nasdaq_ir_cffi'):
-            # NASDAQ IR platform: static-files or files-encrypted links
+            # NASDAQ IR platform: static-files or files-encrypted links.
+            # PDF URLs are opaque UUIDs (e.g. /static-files/<uuid>) and don't
+            # encode the quarter, so we iterate candidates and verify each
+            # PDF's text against target_quarter before committing.
             matches = re.findall(config['doc_pattern'], html)
-            if matches:
-                # Deduplicate
-                matches = list(dict.fromkeys(matches))
-                # Prefer earnings PDFs (filter by keyword)
-                # 'hkex' and 'eps' added for HK-listed companies like Kuaishou
-                pr_keywords = ['announces', 'results', 'earnings', 'hkex', 'eps']
-                for m in matches:
-                    decoded = requests.utils.unquote(m)
-                    if any(kw in decoded.lower() for kw in pr_keywords):
-                        pdf_url = m if m.startswith('http') else f"{config['pdf_base']}{m}"
-                        print(f"    [IR] Found PDF: ...{decoded[-60:]}")
-                        break
-                # Fallback: first match
-                if not pdf_url:
-                    m = matches[0]
-                    pdf_url = m if m.startswith('http') else f"{config['pdf_base']}{m}"
-                    print(f"    [IR] Found PDF (fallback): ...{requests.utils.unquote(m)[-60:]}")
+            if not matches:
+                print(f"    [IR] No PDF links matched pattern on listing page")
+                return None, None
+            matches = list(dict.fromkeys(matches))
+            # Order: keyword-decoded URLs first (e.g. 'announces', 'results')
+            pr_keywords = ['announces', 'results', 'earnings', 'hkex', 'eps']
+            def _is_pr(m):
+                return any(kw in requests.utils.unquote(m).lower() for kw in pr_keywords)
+            candidates = sorted(matches, key=lambda m: 0 if _is_pr(m) else 1)
+
+            import pdfplumber
+            import io
+            for m in candidates:
+                trial_url = m if m.startswith('http') else f"{config['pdf_base']}{m}"
+                decoded = requests.utils.unquote(m)
+                print(f"    [IR] Trying PDF: ...{decoded[-60:]}")
+                try:
+                    if config['type'] == 'nasdaq_ir_cffi':
+                        try:
+                            from curl_cffi import requests as cffi_requests
+                            _dl = cffi_requests.Session(impersonate='chrome120')
+                            pdf_resp = _dl.get(trial_url, timeout=60)
+                        except ImportError:
+                            pdf_resp = requests.get(trial_url, headers=headers, timeout=60)
+                    else:
+                        pdf_resp = requests.get(trial_url, headers=headers, timeout=30)
+                    pdf_resp.raise_for_status()
+                    if len(pdf_resp.content) < 1000:
+                        print(f"    [IR] PDF too small ({len(pdf_resp.content)} bytes), skipping")
+                        continue
+                    with pdfplumber.open(io.BytesIO(pdf_resp.content)) as pdf:
+                        text_parts = []
+                        for page in pdf.pages[:20]:
+                            t = page.extract_text()
+                            if t:
+                                text_parts.append(t)
+                        full_text = '\n\n'.join(text_parts)
+                    if len(full_text) < 500:
+                        print(f"    [IR] Extracted text too short ({len(full_text)} chars), skipping")
+                        continue
+                    if target_quarter and not _text_matches_quarter(full_text, target_quarter):
+                        print(f"    [IR] PDF doesn't match {target_quarter}, trying next candidate...")
+                        continue
+                    print(f"    OK: IR press release {len(full_text)} chars from PDF")
+                    return full_text, trial_url
+                except Exception as e:
+                    print(f"    [IR] Candidate failed: {e}")
+                    continue
+            print(f"    [IR] No matching PDF among {len(candidates)} candidates")
+            return None, None
         
         if not pdf_url:
             print(f"    [IR] Could not find PDF URL")
@@ -873,7 +1099,7 @@ def fetch_press_release(company_name, ticker, quarter, sa_items=None):
 
     # Source 1 (Priority): Direct IR page scraper (大厂专用 — 不可动！)
     if not pr_content and ticker in _IR_CONFIGS:
-        ir_text, ir_url = fetch_ir_press_release(ticker)
+        ir_text, ir_url = fetch_ir_press_release(ticker, target_quarter=quarter or '')
         if ir_text:
             pr_content = ir_text
         if ir_url:
@@ -986,7 +1212,12 @@ def run_earnings_pipeline(companies, query="", output_dir=None, transcript_file=
             else:
                 print(f"  ⚠ CDP transcript too short ({len(cdp_content):,} chars < {CDP_TRANSCRIPT_MIN_CHARS}), treating as missing")
 
-        if not cdp_transcript_found and not transcript_file:
+        # EC Pro bypasses the gate: when discover_latest_quarter returns
+        # __ec_pro-flagged items, fetch_transcript() will pull a full
+        # (~20-50k chars) transcript directly — no need to wait for CDP.
+        ec_pro_available = bool(sa_items and sa_items[0].get('__ec_pro'))
+
+        if not cdp_transcript_found and not transcript_file and not ec_pro_available:
             print(f"\n  🚨 BLOCKED: 完整 SA transcript 未找到！")
             print(f"  请先通过 CDP MCP 获取完整 Seeking Alpha transcript 并保存到:")
             print(f"    {cdp_transcript_path}")
