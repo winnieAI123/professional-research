@@ -43,6 +43,26 @@ _EC_TICKER_ALIAS = {
 QUARTER_RE = re.compile(r'Q(\d)\s+(\d{4})')
 
 
+def _request_without_env_proxy(method, url, **kwargs):
+    """Avoid local proxy env causing RapidAPI SSL/proxy failures."""
+    session = requests.Session()
+    session.trust_env = False
+    return session.request(method, url, **kwargs)
+
+
+def _quarter_matches(title, target_quarter):
+    """Match direct quarters plus SA fiscal-year labels one year ahead."""
+    if not target_quarter:
+        return True
+    qm = QUARTER_RE.search(title or '')
+    tm = QUARTER_RE.search(target_quarter)
+    if not qm or not tm:
+        return target_quarter in (title or '')
+    q, year = int(qm.group(1)), int(qm.group(2))
+    target_q, target_year = int(tm.group(1)), int(tm.group(2))
+    return q == target_q and year in (target_year, target_year + 1)
+
+
 
 
 # ============================================================
@@ -91,6 +111,11 @@ _HK_TO_ADR = {
     '1810.HK': 'XIACY',
     '1024.HK': 'KUASF', '01024.HK': 'KUASF',
 }
+
+# ADR ticker → HK numeric code (for HKEXnews official PR fallback).
+# Derived from the HK→ADR reverse map plus the EC alias table.
+_ADR_TO_HK = {adr: hk.split('.')[0].lstrip('0') for hk, adr in _HK_TO_ADR.items()}
+_ADR_TO_HK.update(_EC_TICKER_ALIAS)
 
 def _resolve_sa_ticker(company_name, detect_ticker):
     """
@@ -215,7 +240,8 @@ def _ec_search_earnings(ticker):
     search_ticker = _EC_TICKER_ALIAS.get(ticker.upper(), ticker)
     expected_symbol = search_ticker.upper()
     try:
-        r = requests.get(
+        r = _request_without_env_proxy(
+            "GET",
             f"{EC_BASE}/earnings/",
             params={"ticker": search_ticker},
             headers={"x-rapidapi-host": EC_HOST, "x-rapidapi-key": RAPIDAPI_KEY},
@@ -256,7 +282,8 @@ def _fetch_ec_pro_content(numeric_id):
     if not RAPIDAPI_KEY:
         return ''
     try:
-        r = requests.get(
+        r = _request_without_env_proxy(
+            "GET",
             f"{EC_BASE}/transcripts/{numeric_id}",
             headers={"x-rapidapi-host": EC_HOST, "x-rapidapi-key": RAPIDAPI_KEY},
             timeout=30,
@@ -317,7 +344,8 @@ def discover_latest_quarter(ticker, company_name):
     # 1. Check SA API for all recent items
     if RAPIDAPI_KEY:
         try:
-            resp = requests.get(
+            resp = _request_without_env_proxy(
+                "GET",
                 'https://seeking-alpha.p.rapidapi.com/transcripts/v2/list',
                 params={'id': ticker.lower(), 'size': '10'},
                 headers=headers, timeout=20
@@ -545,7 +573,7 @@ def fetch_transcript(ticker, target_quarter='', sa_items=None):
         target_item = None
         if target_quarter:
             for it in ec_items:
-                if target_quarter in it['attributes'].get('title', ''):
+                if _quarter_matches(it['attributes'].get('title', ''), target_quarter):
                     target_item = it
                     break
             if not target_item:
@@ -586,7 +614,8 @@ def fetch_transcript(ticker, target_quarter='', sa_items=None):
     else:
         print(f"    [SA] Searching transcripts for {ticker}...")
         try:
-            resp = requests.get(
+            resp = _request_without_env_proxy(
+                "GET",
                 'https://seeking-alpha.p.rapidapi.com/transcripts/v2/list',
                 params={'id': ticker.lower(), 'size': '10'},
                 headers=headers, timeout=20
@@ -613,7 +642,7 @@ def fetch_transcript(ticker, target_quarter='', sa_items=None):
         for item in transcript_items:
             title = item.get('attributes', {}).get('title', '')
             qm = re.search(r'Q(\d)\s+(\d{4})', title)
-            if qm and f"Q{qm.group(1)} {qm.group(2)}" == target_quarter:
+            if qm and _quarter_matches(title, target_quarter):
                 latest = item
                 print(f"    ✓ Found transcript matching target {target_quarter}")
                 break
@@ -663,7 +692,8 @@ def fetch_transcript(ticker, target_quarter='', sa_items=None):
     # Priority 2: RapidAPI (often truncated)
     html = ''
     try:
-        resp = requests.get(
+        resp = _request_without_env_proxy(
+            "GET",
             'https://seeking-alpha.p.rapidapi.com/transcripts/v2/get-details',
             params={'id': tid}, headers=headers, timeout=30
         )
@@ -807,29 +837,30 @@ def fetch_ir_press_release(ticker, target_quarter=''):
         pdf_url = None
         
         if config['type'] == 'baba':
-            # BABA listing now uses JSON-embedded metadata with documentTitle.
-            # Parse title+PDF pairs and filter by title (URL is opaque UUID).
-            # Note: BABA's "quarterly-results" page typically only lists HK
-            # interim reports (semi-annual) + annual reports, NOT the US-style
-            # quarterly earnings PRs. So we usually return None and let the
-            # caller fall back to Tavily.
-            doc_pairs = re.findall(
-                r'"documentTitle":"([^"]+)"[\s\S]{0,800}?"pdf":"([^"]+\.pdf)"',
-                html,
-            )
-            exclude_kw = ['interim report', 'annual report', 'esg', 'sustainability']
-            quarterly_titles = [
-                (t, u) for (t, u) in doc_pairs
-                if not any(x in t.lower() for x in exclude_kw)
-                and any(k in t.lower() for k in ['announces', 'press release', 'earnings'])
-            ]
-            if quarterly_titles:
-                title, pdf_url = quarterly_titles[0]
-                print(f"    [IR] BABA quarterly PR: {title[:60]}")
-            else:
-                print(f"    [IR] BABA listing page has no quarterly PRs (only interim/annual reports)")
+            # 2-hop: the Quarterly Results listing carries a single document-{id}
+            # link for the latest quarter's PR; that detail page holds the real
+            # PDF on data.alibabagroup.com. (The documentTitle JSON on the listing
+            # only covers the Financial Reports tab — interim/annual reports — not
+            # the quarterly earnings PR, so matching that JSON misses the PR.)
+            # href in the static HTML is a relative path (/en-US/document-{id}),
+            # so match without the domain prefix.
+            doc_ids = list(dict.fromkeys(re.findall(r'document-(\d+)', html)))
+            if not doc_ids:
+                print(f"    [IR] No document link on Alibaba listing")
                 return None, None
-        
+            detail_url = f"https://www.alibabagroup.com/en-US/document-{doc_ids[0]}"
+            try:
+                from curl_cffi import requests as cffi_requests
+                detail_html = cffi_requests.Session(impersonate='chrome120').get(detail_url, timeout=60).text
+            except ImportError:
+                detail_html = requests.get(detail_url, headers=headers, timeout=60).text
+            pdf_links = re.findall(r'https?://data\.alibabagroup\.com[^"\'<>\s\\]+\.pdf', detail_html)
+            if not pdf_links:
+                print(f"    [IR] No PDF found on Alibaba detail page")
+                return None, None
+            pdf_url = pdf_links[0]
+            print(f"    [IR] BABA quarterly PR: ...{requests.utils.unquote(pdf_url)[-55:]}")
+
         elif config['type'] == 'meituan':
             # Meituan: listing page has PDF URLs, but PDFs are CF-protected
             # Extract PR URL for reference, text will come from Tavily fallback
@@ -965,6 +996,7 @@ def fetch_ir_press_release(ticker, target_quarter=''):
 
             import pdfplumber
             import io
+            latest_fallback = None  # first successfully-extracted PR (= latest quarter)
             for m in candidates:
                 trial_url = m if m.startswith('http') else f"{config['pdf_base']}{m}"
                 decoded = requests.utils.unquote(m)
@@ -993,6 +1025,8 @@ def fetch_ir_press_release(ticker, target_quarter=''):
                     if len(full_text) < 500:
                         print(f"    [IR] Extracted text too short ({len(full_text)} chars), skipping")
                         continue
+                    if latest_fallback is None:
+                        latest_fallback = (full_text, trial_url)
                     if target_quarter and not _text_matches_quarter(full_text, target_quarter):
                         print(f"    [IR] PDF doesn't match {target_quarter}, trying next candidate...")
                         continue
@@ -1001,7 +1035,12 @@ def fetch_ir_press_release(ticker, target_quarter=''):
                 except Exception as e:
                     print(f"    [IR] Candidate failed: {e}")
                     continue
-            print(f"    [IR] No matching PDF among {len(candidates)} candidates")
+            # No exact quarter match — the latest PR is still the right answer,
+            # so use it instead of falling through to a web search.
+            if latest_fallback:
+                print(f"    [IR] No exact {target_quarter} match; using latest PR ({len(latest_fallback[0])} chars)")
+                return latest_fallback
+            print(f"    [IR] No usable PDF among {len(candidates)} candidates")
             return None, None
         
         if not pdf_url:
@@ -1046,6 +1085,111 @@ def fetch_ir_press_release(ticker, target_quarter=''):
         
     except Exception as e:
         print(f"    [IR] Failed: {e}")
+        return None, None
+
+
+# ============================================================
+# HKEXnews official press-release fallback (HK-listed names)
+# ============================================================
+# Many HK IR CDNs (e.g. Meituan/todayir) serve their PR PDFs behind a
+# Cloudflare managed challenge that blocks non-browser downloads. HKEXnews
+# hosts the same official results announcement with no protection, so for any
+# HK-listed ticker we can fetch the authoritative full text directly.
+_HK_MONTH_Q = {'MARCH': 'Q1', 'JUNE': 'Q2', 'SEPTEMBER': 'Q3', 'DECEMBER': 'Q4'}
+_HK_QWORD = {'FIRST': 'Q1', 'SECOND': 'Q2', 'THIRD': 'Q3', 'FOURTH': 'Q4'}
+
+
+def _hk_title_to_quarter(title):
+    """Map an HKEXnews results-announcement title to 'Q{n} YYYY'.
+
+    Handles both HK primary-listing wording ('THREE MONTHS ENDED MARCH 31, 2026',
+    day/month order agnostic) and US-style secondary listings like JD-SW
+    ('FIRST QUARTER 2026 RESULTS', 'FOURTH QUARTER AND FULL YEAR 2025 RESULTS').
+    """
+    t = (title or '').upper()
+    m = re.search(r'(FIRST|SECOND|THIRD|FOURTH)\s+QUARTER\b.*?(\d{4})', t)
+    if m:
+        return f"{_HK_QWORD[m.group(1)]} {m.group(2)}"
+    if 'YEAR ENDED' in t and 'RESULTS' in t:
+        y = re.search(r'YEAR\s+ENDED.{0,20}?(\d{4})', t)
+        return f"Q4 {y.group(1)}" if y else ''
+    m = re.search(r'(THREE|SIX|NINE)\s+MONTHS\s+ENDED(.{0,30}?(\d{4}))', t)
+    if not m:
+        return ''
+    seg = m.group(2)
+    mo = next((k for k in _HK_MONTH_Q if k in seg), None)
+    return f"{_HK_MONTH_Q[mo]} {m.group(3)}" if mo else ''
+
+
+def _fetch_from_hkexnews(hk_code, target_quarter=''):
+    """Fetch the official results-announcement PDF from HKEXnews (no Cloudflare).
+
+    Returns (text, url) or (None, None). hk_code is the numeric HK code (e.g. '3690').
+    """
+    import io
+    ua = {'User-Agent': 'Mozilla/5.0'}
+    try:
+        # Step 1: numeric code -> internal stockId
+        pr = _request_without_env_proxy(
+            'GET', 'https://www1.hkexnews.hk/search/prefix.do',
+            params={'callback': 'c', 'lang': 'EN', 'type': 'A', 'name': hk_code, 'market': 'SEHK'},
+            timeout=20, headers=ua).text
+        pr = pr[pr.find('(') + 1:pr.rfind(')')]
+        stock_id = None
+        for it in json.loads(pr).get('stockInfo', []):
+            if str(it.get('code', '')).lstrip('0') == str(hk_code).lstrip('0'):
+                stock_id = it.get('stockId')
+                break
+        if not stock_id:
+            print(f"    [HKEX] No stockId for HK code {hk_code}")
+            return None, None
+
+        # Step 2: list announcements, keep only results PRs (newest first)
+        sr = _request_without_env_proxy(
+            'GET', 'https://www1.hkexnews.hk/search/titleSearchServlet.do',
+            params={'sortDir': '0', 'sortByOptions': 'DateTime', 'category': '0',
+                    'market': 'SEHK', 'stockId': stock_id, 'documentType': '-1',
+                    'fromDate': '', 'toDate': '', 'title': '', 'searchType': '1',
+                    't': '1', 'lang': 'en'},
+            timeout=25, headers={**ua, 'Referer': 'https://www1.hkexnews.hk/search/titlesearch.xhtml'}).text
+        rows = json.loads(sr).get('result')
+        if isinstance(rows, str):
+            rows = json.loads(rows)
+        cand = [it for it in rows
+                if 'RESULTS' in (it.get('TITLE') or '').upper()
+                and any(k in (it.get('TITLE') or '').upper()
+                        for k in ['MONTHS ENDED', 'YEAR ENDED', 'ANNUAL RESULTS',
+                                  'INTERIM RESULTS', 'QUARTER', 'FULL YEAR'])]
+        if not cand:
+            print(f"    [HKEX] No results announcement for {hk_code}")
+            return None, None
+
+        chosen = None
+        if target_quarter:
+            for it in cand:
+                if _hk_title_to_quarter(it.get('TITLE') or '') == target_quarter:
+                    chosen = it
+                    break
+            if not chosen:
+                print(f"    [HKEX] No PR matched {target_quarter}; using latest")
+        chosen = chosen or cand[0]
+        pdf_url = 'https://www1.hkexnews.hk' + (chosen.get('FILE_LINK') or '')
+
+        # Step 3: download + extract
+        import pdfplumber
+        resp = _request_without_env_proxy('GET', pdf_url, timeout=40, headers=ua)
+        resp.raise_for_status()
+        if resp.content[:4] != b'%PDF':
+            print(f"    [HKEX] Not a PDF: {pdf_url}")
+            return None, None
+        with pdfplumber.open(io.BytesIO(resp.content)) as pdf:
+            text = '\n'.join(p.extract_text() or '' for p in pdf.pages)
+        if len(text) < 500:
+            return None, None
+        print(f"    [HKEX] Official PR: {(chosen.get('TITLE') or '')[:50].strip()} ({len(text)} chars)")
+        return text, pdf_url
+    except Exception as e:
+        print(f"    [HKEX] Fetch failed: {e}")
         return None, None
 
 
@@ -1104,6 +1248,17 @@ def fetch_press_release(company_name, ticker, quarter, sa_items=None):
             pr_content = ir_text
         if ir_url:
             pr_url = ir_url
+
+    # Source 1.5 (HK official): HKEXnews results announcement (no Cloudflare).
+    # Catches HK-listed names whose IR CDN blocks PDF download (e.g. Meituan).
+    if not pr_content:
+        hk_code = _ADR_TO_HK.get(ticker)
+        if hk_code:
+            hk_text, hk_url = _fetch_from_hkexnews(hk_code, target_quarter=quarter or '')
+            if hk_text:
+                pr_content = hk_text
+                if hk_url:
+                    pr_url = hk_url
 
     # Source 2 (Fallback): Tavily press release search
     if not pr_content and TAVILY_API_KEY:
