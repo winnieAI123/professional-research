@@ -1,6 +1,6 @@
 # 🔬 Professional Research Skill
 
-A template-driven, multi-source research framework that produces **institutional-grade reports** across 9 research types. Designed as a skill for AI coding assistants (Claude Code, etc.) to automate end-to-end research workflows.
+A template-driven, multi-source research framework that produces **institutional-grade reports** across 10 research types. Designed as a skill for AI coding assistants (Claude Code, etc.) to automate end-to-end research workflows.
 
 > **Template-driven means zero code changes** — edit a Markdown template to reshape your report's structure, sections, and style.
 
@@ -17,6 +17,7 @@ A template-driven, multi-source research framework that produces **institutional
 | 7 | **KOL Weekly Digest** | Tech leader tweet aggregation & analysis | 🐦 Twitter/X |
 | 8 | **Financial Data & Earnings** | Multi-source quarterly earnings analysis | 📊 SEC EDGAR, 📊 EastMoney, 🎙️ Seeking Alpha |
 | 9 | **LLM Leaderboard** | Cross-platform AI model ranking comparison | 🏆 LMArena, ArtificialAnalysis |
+| 10 | **Hot Take** | Trending-event analysis with multi-perspective opinion aggregation | 🐦 Twitter/X, 🌐 Tavily |
 
 ## 🏗️ Architecture
 
@@ -32,7 +33,7 @@ professional-research/
 │   ├── product_research_hardware.md
 │   ├── company_research_tech.md
 │   ├── earnings_quarterly.md
-│   └── ... (15 templates)
+│   └── ... (16 templates)
 ├── references/               # Per-type methodology guides
 │   ├── type1_product_research.md
 │   └── ... (9 reference docs)
@@ -44,7 +45,7 @@ professional-research/
 │   ├── llm_client.py         #   Gemini API with 4-model fallback chain
 │   ├── generate_report.py    #   Section-by-section report generation
 │   ├── md_to_word.py         #   Markdown → Word conversion (宋体 + Arial)
-│   └── ... (23 scripts total)
+│   └── ... (30 scripts total)
 ├── .env.example              # API key template
 └── requirements.txt          # Python dependencies
 ```
@@ -121,7 +122,7 @@ Reports are generated in both formats:
 
 ## 📜 License
 
-MIT
+Released under the [MIT License](LICENSE) — free to use, modify, and distribute.
 
 ---
 
