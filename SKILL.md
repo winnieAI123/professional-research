@@ -139,7 +139,8 @@ python -m pip install tavily-python google-genai arxiv PyMuPDF feedparser python
 |-----|---------|---------|
 | `GEMINI_API_KEY` | 所有 Type 的 LLM 分析 | 无法调用脚本中的 Gemini 模型，报告质量严重下降 |
 | `TAVILY_API_KEY` | 搜索 + 全文提取 | 降级为 Agent 原生搜索工具，效果接近但部分全文提取受限 |
-| `RAPIDAPI_KEY` | Type 8B Earnings Call Transcript | 无法获取 Seeking Alpha 完整文稿 |
+| `ECALLS_API_KEY` | Type 8B Earnings Call Transcript（首选源 earningscalls.dev） | 无法获取完整文稿，降级到 SA |
+| `RAPIDAPI_KEY` | Type 8B Seeking Alpha 兜底源 | 无法获取 Seeking Alpha 文稿 |
 | `TWITTER_API_KEY` | Type 4, Type 7 KOL 数据 | 无法采集 Twitter/X 推文 |
 
 ### Step 2: 缺失时的用户交互流程
@@ -178,6 +179,7 @@ python -m pip install tavily-python google-genai arxiv PyMuPDF feedparser python
 |----------|---------|---------|
 | `GEMINI_API_KEY` | ⚠️ **严重降级** — Agent 用自身能力直接撰写，无法调用脚本内的 Gemini pipeline | 报告质量大幅下降，建议强烈推荐用户配置 |
 | `TAVILY_API_KEY` | 使用 Agent 原生 `search_web` + `read_url_content` 替代 | 质量接近，可接受 |
+| `ECALLS_API_KEY` | 降级到 SA RapidAPI（常 500/截断），再降级网页搜索摘要 | 第五章质量下降，需标注 |
 | `RAPIDAPI_KEY` | 改用网页搜索获取 Earnings Call 摘要（非完整文稿） | 第五章质量下降，需标注 |
 | `TWITTER_API_KEY` | 使用网页搜索 `site:x.com` 替代，覆盖面有限 | KOL 覆盖率下降约 50% |
 

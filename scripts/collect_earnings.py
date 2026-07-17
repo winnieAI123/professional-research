@@ -27,11 +27,15 @@ from collect_financial_deep import get_api_key, detect_data_source
 RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY", "")
 TAVILY_API_KEY = get_api_key("TAVILY_API_KEY")
 
-# earnings-call-transcripts1 Pro API (Capital IQ-backed, full transcripts).
+# earningscalls.dev direct API (Capital IQ-backed, full transcripts).
 # Primary transcript source — far more reliable than SA RapidAPI which
 # frequently 500s and truncates content.
-EC_HOST = "earnings-call-transcripts1.p.rapidapi.com"
-EC_BASE = f"https://{EC_HOST}/api/v1"
+# 2026-07-17: the provider discontinued the RapidAPI listing
+# (earnings-call-transcripts1), so we call earningscalls.dev directly with
+# its own key. Their WAF rejects python-requests' default User-Agent.
+ECALLS_API_KEY = os.environ.get("ECALLS_API_KEY", "")
+EC_BASE = "https://earningscalls.dev/api/v1"
+EC_HEADERS = {"X-API-Key": ECALLS_API_KEY, "User-Agent": "Mozilla/5.0"}
 # US ADR → HK numeric. EC Pro indexes Tencent/Meituan/Kuaishou/Xiaomi
 # under the HK primary listing, not the US ADR.
 _EC_TICKER_ALIAS = {
@@ -39,6 +43,7 @@ _EC_TICKER_ALIAS = {
     "MPNGY": "3690",  # Meituan
     "KUASF": "1024",  # Kuaishou
     "XIACY": "1810",  # Xiaomi
+    "TSM": "2330",    # TSMC — the TSM symbol stopped updating after FY25Q4
 }
 QUARTER_RE = re.compile(r'Q(\d)\s+(\d{4})')
 
@@ -229,22 +234,40 @@ def _discover_euroland(companycode):
 # Step 0: Quarter Discovery — determine latest earnings quarter
 # ============================================================
 def _ec_search_earnings(ticker):
-    """Return recent earnings events from earnings-call-transcripts1 Pro.
+    """Return recent earnings events from earningscalls.dev.
 
-    Filters to exact-symbol matches with :US/:HK primary listing, event_type
-    'Earnings Calls' only, sorted newest first. Returns list of dicts:
-    {id, quarter, title, date}. Empty list on failure.
+    Resolves the primary venue first (ticker symbols collide: JD = JD.com on
+    XNAS *and* JD Sports on XLON), then filters the earnings list by that
+    venue's MIC, event_type 'earnings' only, sorted newest first. Returns
+    list of dicts: {id, quarter, title, date}. Empty list on failure.
     """
-    if not RAPIDAPI_KEY:
+    if not ECALLS_API_KEY:
         return []
     search_ticker = _EC_TICKER_ALIAS.get(ticker.upper(), ticker)
     expected_symbol = search_ticker.upper()
     try:
         r = _request_without_env_proxy(
             "GET",
+            f"{EC_BASE}/companies/ticker/{search_ticker}/latest",
+            headers=EC_HEADERS,
+            timeout=15,
+        )
+        if r.status_code != 200:
+            print(f"    [EC Pro] venue lookup returned {r.status_code}")
+            return []
+        mic = (r.json().get("data") or {}).get("mic") or ""
+    except Exception as e:
+        print(f"    [EC Pro] venue lookup failed: {e}")
+        return []
+    try:
+        params = {"ticker": search_ticker, "limit": 10}
+        if mic:
+            params["mic"] = mic
+        r = _request_without_env_proxy(
+            "GET",
             f"{EC_BASE}/earnings/",
-            params={"ticker": search_ticker},
-            headers={"x-rapidapi-host": EC_HOST, "x-rapidapi-key": RAPIDAPI_KEY},
+            params=params,
+            headers=EC_HEADERS,
             timeout=15,
         )
         if r.status_code != 200:
@@ -254,38 +277,35 @@ def _ec_search_earnings(ticker):
     except Exception as e:
         print(f"    [EC Pro] search failed: {e}")
         return []
-    # ?ticker=JD also returns JDC, JDG — require exact stock_symbol match.
-    matched = [x for x in items if (x.get("stock_symbol") or "").upper() == expected_symbol]
-    if not matched:
-        return []
-    main_listing = [x for x in matched if (x.get("company_ticker") or "").endswith((":US", ":HK"))]
-    pool = main_listing if main_listing else matched
-    earnings = [x for x in pool if x.get("event_type") == "Earnings Calls"]
+    # No quarter in transcript_title anymore — read fiscal_year/fiscal_quarter.
+    # Rows without fiscal fields (e.g. investor days) can't be quarter-labeled.
+    earnings = [
+        x for x in items
+        if (x.get("stock_symbol") or "").upper() == expected_symbol
+        and x.get("event_type") == "earnings"
+        and x.get("fiscal_year") and x.get("fiscal_quarter")
+    ]
     earnings.sort(key=lambda x: x.get("event_date_time", ""), reverse=True)
     result = []
     for x in earnings:
-        title = x.get("transcript_title", "")
-        qm = QUARTER_RE.search(title)
-        if not qm:
-            continue
         result.append({
             'id': str(x['id']),
-            'quarter': f"Q{qm.group(1)} {qm.group(2)}",
-            'title': title,
+            'quarter': f"Q{x['fiscal_quarter']} {x['fiscal_year']}",
+            'title': x.get("transcript_title", ""),
             'date': (x.get("event_date_time") or "")[:10],
         })
     return result
 
 
 def _fetch_ec_pro_content(numeric_id):
-    """Fetch full transcript text from earnings-call-transcripts1 Pro."""
-    if not RAPIDAPI_KEY:
+    """Fetch full transcript text from earningscalls.dev."""
+    if not ECALLS_API_KEY:
         return ''
     try:
         r = _request_without_env_proxy(
             "GET",
             f"{EC_BASE}/transcripts/{numeric_id}",
-            headers={"x-rapidapi-host": EC_HOST, "x-rapidapi-key": RAPIDAPI_KEY},
+            headers=EC_HEADERS,
             timeout=30,
         )
         if r.status_code != 200:
@@ -313,7 +333,7 @@ def discover_latest_quarter(ticker, company_name):
     elif ticker.upper() == '2513.HK':
         return _discover_euroland('hk-2513')
 
-    # Priority 0: earnings-call-transcripts1 Pro (Capital IQ-backed, full transcripts).
+    # Priority 0: earningscalls.dev (Capital IQ-backed, full transcripts).
     # Returns ec_pro-flagged items that fetch_transcript() recognizes and pulls
     # full text from. Skip SA list call entirely on hit — SA RapidAPI frequently
     # 500s for these same tickers.
@@ -553,7 +573,7 @@ def fetch_transcript(ticker, target_quarter='', sa_items=None):
                 'id': f"proxy_{ticker}"
             }
 
-    # Priority 0: earnings-call-transcripts1 Pro
+    # Priority 0: earningscalls.dev
     # Use pre-fetched sa_items from discover_latest_quarter when available;
     # otherwise call EC Pro search directly. EC Pro returns full transcripts
     # (~20-50k chars) without truncation — preferred over SA RapidAPI.
