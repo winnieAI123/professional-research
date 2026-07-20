@@ -32,7 +32,7 @@ kol_tweets = search_kol_tweets(kol_usernames, "[topic]", tweets_per_kol=10)
 topic_tweets = search_topic_tweets("[topic] trend", total_count=30)
 ```
 
-**Step 4**: Tweets are already full-text (short by nature). Feed directly to `llm_client.extract_opinions()`.
+**Step 4**: Tweets are already full-text (short by nature). **Agent 自己读推文做观点提取**（不要调 `llm_client.extract_opinions()`）。
 
 ### Source 2: Substack Deep Articles
 
@@ -48,7 +48,7 @@ posts = search_substack("[topic] analysis", max_pages=3)
 posts = get_full_articles(posts, max_articles=10)
 ```
 
-**Step 3**: For each article with full_content, call `llm_client.extract_opinions()` to get structured opinion data. This is the MANDATORY full-text reading step — never skip this.
+**Step 3**: For each article with full_content, **Agent 自己读全文做观点提取**（不要调 `llm_client.extract_opinions()`）。This is the MANDATORY full-text reading step — never skip this.
 
 ### Source 3: Tavily Web Search
 
@@ -73,7 +73,7 @@ urls = [r["url"] for r in results[:10]]
 full_content = tavily_extract(urls)
 ```
 
-**Step 3**: Feed each to `llm_client.extract_opinions()`.
+**Step 3**: **Agent 自己读 web 全文做观点提取**（不要调 `llm_client.extract_opinions()`）。
 
 ### Source 4: arXiv (Optional, when topic involves technical paradigm shifts)
 
@@ -152,12 +152,12 @@ No fabricated quotes. No paraphrased-as-quoted content. If the LLM didn't read t
 
 ## Report Output — Agent-Driven Per-Chapter
 
-> **Important**: Do NOT use `run_report_gen.py` for trend analysis.
-> Use the per-chapter workflow defined in `skill.md` Type 4 section (Phase 1-4).
+> **Important**: Do NOT use `run_report_gen.py` / `llm_client.py` / 临时 Python 脚本调 LLM API 来生成趋势分析报告。
+> Use the per-chapter Write workflow defined in `skill.md` Type 4 section (Phase 1-4).
 
 The Agent should:
 1. Collect data from all 4 sources (Phase 2)
-2. For EACH of the 8 chapters: feed that chapter's template + relevant data subset → `generate_content()` → get chapter output
+2. For EACH of the 8 chapters: 读取该章的模板 + 相关数据子集 → **Agent 用 Write 工具撰写该章并写入 `chapter_XX.md`**
 3. Concatenate in order → `save_report()` for MD + Word
 
 ## Quality Gate (Mandatory)

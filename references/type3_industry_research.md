@@ -74,9 +74,9 @@ papers = fetch_and_analyze_papers(
 )
 ```
 
-### Step 3: LLM Deep Analysis
+### Step 3: Agent Deep Analysis
 
-For each paper with full text, call `llm_client.analyze_paper()` to get structured analysis:
+For each paper with full text, **Agent 自己读全文做结构化分析**（不要调 `llm_client.analyze_paper()`）。提取要点：
 - Core problem & motivation
 - Proposed method/architecture
 - Key innovations
@@ -106,22 +106,22 @@ Synthesize technical trends from papers and web search:
 - What's still unsolved
 - Short/mid/long-term route predictions
 
-### Important: 503 Error Handling
-arXiv PDF processing + Gemini analysis may trigger 503 errors. The `llm_client.py` automatically tries fallback models. If one model gives 503, it switches to the next — do NOT stop the pipeline.
+### Important: PDF Reading
+arXiv PDF 文本提取由 `run_arxiv_pipeline.py` 完成（仅下载+抽文本，无 LLM 调用）。提取后的全文由 **Agent 自己阅读做结构化分析**，不再依赖 Gemini。
 
 ---
 
 ## Report Generation — Agent-Driven Per-Chapter
 
-> **Important**: Do NOT use `run_report_gen.py` for industry research.
-> Use the per-chapter workflow defined in `skill.md` Type 3 section.
+> **Important**: Do NOT use `run_report_gen.py` / `llm_client.py` / 临时 Python 脚本调 LLM API 来生成行业研究报告。
+> Use the per-chapter Write workflow defined in `skill.md` Type 3 section.
 
 The Agent should:
 1. Read the template and split by `## 一、` / `## 二、` etc. to isolate each chapter's template section
-2. For EACH chapter: feed that chapter's template + that chapter's collected data → `generate_content()` → get chapter output
+2. For EACH chapter: 读取该章的模板 + 该章收集的数据 → **Agent 用 Write 工具撰写该章并写入 `chapter_XX.md`**
 3. After ALL chapters: concatenate in order → `save_report()` for MD + Word
 
-**Why per-chapter**: A single prompt with both templates (~270 lines) + all data causes Gemini to truncate output and lose data. Per-chapter generation ensures each section gets full context and max_output_tokens.
+**Why per-chapter**: 一次 Write 写完整报告（含模板 ~270 行 + 全部数据）会导致内容被压缩、关键数据丢失。逐章撰写确保每章获得完整的上下文。
 
 **If Commercial + Technical**:
 1. Generate all 4 commercial chapters first

@@ -16,7 +16,7 @@ After SKILL.md routes to this reference, determine the product sub-type:
 
 ### 🚨 Agent-Driven 逐章写作（MANDATORY）
 
-硬件产品研究**禁止**使用 `run_report_gen.py` 一次性生成。必须逐章搜索 → 逐章写作 → 最终拼接。
+硬件产品研究**禁止**用脚本一次性生成（也不允许一次 Write 调用写完）。必须逐章搜索 → 逐章用 Write 工具写作（每章独立成 `chapter_XX.md`） → 最终拼接。
 
 ### 执行流程
 
@@ -126,7 +126,7 @@ Generate search queries targeting each dimension:
 ### 执行顺序
 
 > 🚨 **Software 产品研究必须使用 Agent-Driven 逐章工作流**（详见 `skill.md` 的 Type 1 Software 部分）。
-> 禁止使用 `run_report_gen.py` 一次性生成。
+> 禁止用脚本或一次 Write 一次性生成。每章独立 Write 写入 `chapter_XX.md`。
 
 ```
 Phase 1: 模板解析
@@ -197,12 +197,12 @@ From the service type, generate queries covering:
 
 ## Report Generation
 
-> **Hardware and Software** sub-types use Agent-driven per-chapter workflows (see `skill.md`).
-> **Service** sub-type may still use `run_report_gen.py` for simpler reports.
+> **Hardware, Software, Service** 三个子类型全部使用 Agent-driven per-chapter workflow（详见 `skill.md`）。
+> **Service** 子类型虽然结构较简单，也必须用 Write 工具逐章撰写，不要调脚本。
 
 For Service reports:
 ```python
 from utils import read_template
 template = read_template("product_research_service.md")
 ```
-Then call `llm_client.generate_report_section()` with template and collected data.
+Then **Agent 读模板 + 数据，用 Write 工具撰写该章**。不要调 `llm_client.generate_report_section()`。
