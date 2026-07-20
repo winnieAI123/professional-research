@@ -443,6 +443,10 @@ For EACH chapter, **Agent 用 Write 工具单独撰写该章并写入 `chapter_X
 
 > **核心判断 / 成功要素一句话 — 最后写**：所有章节完成后综合提炼。Tech 放报告最前面（核心判断），Finance 放第 1 章（成功要素一句话）。不另外搜索数据。
 
+**Phase 3.5: Precheck（转 Word 前必跑，不可省略）**
+
+> 章节拼接完成后、调用 `save_report()` 之前，按 `references/type2_company_research.md` 末尾的"交付前 Precheck"清单对完整 .md 跑一遍检查：每章末尾数据来源小节、占位符引用（"待查证"）、推测式推演（"这可能涉及"）、身份错配引用（未上市公司出现"财报电话会"）、套话、破折号"——"、关键数字跨章重复次数、融资轮次时序自洽、人物代词与职务核对。任一项不过 → 先修 .md 再进 Phase 4。
+
 **Phase 4: Assembly & Word Output (MANDATORY — DO NOT SKIP)**
 
 按最终报告顺序合并所有章节：
