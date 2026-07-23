@@ -47,12 +47,13 @@ FONT_CONFIG = {
 }
 
 
-def set_font(run, size=None, bold=False, color=None):
+def set_font(run, size=None, bold=False, color=None, italic=False):
     """Apply unified font settings to a run."""
     size = size or FONT_CONFIG['body_size']
     run.font.name = FONT_CONFIG['english']
     run.font.size = Pt(size)
     run.font.bold = bold
+    run.font.italic = italic
     if color:
         run.font.color.rgb = color
     # Set East Asian font for Chinese characters
@@ -87,7 +88,7 @@ def add_hyperlink(paragraph, text, url, color=None):
     paragraph._p.append(hyperlink)
 
 
-def add_rich_text(paragraph, text, size=None, default_bold=False, default_color=None):
+def add_rich_text(paragraph, text, size=None, default_bold=False, default_color=None, default_italic=False):
     """Add text with inline Markdown formatting (bold, links) to a paragraph.
     
     Parses **bold**, [text](url) links, and renders them with proper Word formatting.
@@ -111,20 +112,20 @@ def add_rich_text(paragraph, text, size=None, default_bold=False, default_color=
                 add_hyperlink(paragraph, link_in_bold.group(1), link_in_bold.group(2))
             else:
                 run = paragraph.add_run(inner)
-                set_font(run, size=size, bold=True, color=default_color)
+                set_font(run, size=size, bold=True, color=default_color, italic=default_italic)
             continue
-        
+
         # Link: [text](url)
         link_match = re.match(r'^\[([^\]]+)\]\(([^)]+)\)$', part)
         if link_match:
             add_hyperlink(paragraph, link_match.group(1), link_match.group(2))
             continue
-        
+
         # Plain text — clean remaining markdown syntax
         cleaned = clean_markdown_syntax(part)
         if cleaned:
             run = paragraph.add_run(cleaned)
-            set_font(run, size=size, bold=default_bold, color=default_color)
+            set_font(run, size=size, bold=default_bold, color=default_color, italic=default_italic)
 
 
 def clean_markdown_syntax(text):
@@ -586,7 +587,7 @@ def build_document(elements):
         elif elem_type == 'blockquote':
             p = doc.add_paragraph()
             p.paragraph_format.left_indent = Inches(0.5)
-            add_rich_text(p, elem[1], default_color=RGBColor(0x55, 0x55, 0x55))
+            add_rich_text(p, elem[1], default_color=RGBColor(0x55, 0x55, 0x55), default_italic=True)
 
         elif elem_type == 'hr':
             # Add a blank line as separator
